@@ -1,0 +1,8 @@
+.build/
+.swiftpm/
+*.xcodeproj/xcuserdata/
+build/
+.DS_Store
+# 個人資料存在 ~/Library/Application Support/AssetBook，不在 repo 內
+*.json
+!Package.resolved
