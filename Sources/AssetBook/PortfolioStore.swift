@@ -32,6 +32,8 @@ final class PortfolioStore {
     var isUpdating = false
     var isAddingAccount = false
     var isExporting = false
+    /// 匯出成試算表（CSV）
+    var isExportingSheet = false
     var isImporting = false
     /// 讀檔或存檔失敗時顯示給使用者的訊息
     var alertMessage: String?
@@ -72,6 +74,11 @@ final class PortfolioStore {
     }
 
     var dataFileURL: URL? { persistence?.fileURL }
+
+    func copySheetToClipboard() {
+        SheetExport.copyToClipboard(self)
+        alertMessage = "已複製 \(snapshots.count) 筆紀錄的表格。到 Google 試算表點一格（例如 A1），按 ⌘V 貼上即可。"
+    }
 
     func revealDataFile() {
         #if os(macOS)
@@ -238,14 +245,6 @@ final class PortfolioStore {
 
     enum LiveStatus: Equatable { case idle, loading, ready, failed }
 
-    /// 拆解「自上次紀錄以來」的變化來源
-    struct LiveAttribution {
-        var fx: Double
-        var crypto: Double
-        var stocks: Double
-        var total: Double { fx + crypto + stocks }
-    }
-
     private(set) var liveQuotes: [Quote: Double] = [:]
     private(set) var liveStocks: [String: StockQuote] = [:]
     private(set) var liveUpdatedAt: Date?
@@ -261,20 +260,6 @@ final class PortfolioStore {
                         quotes: latest.quotes.merging(liveQuotes) { _, new in new },
                         amounts: latest.amounts, holdings: latest.holdings,
                         stockPrices: latest.stockPrices.merging(liveStocks.mapValues(\.price)) { _, new in new })
-    }
-
-    var liveAttribution: LiveAttribution? {
-        guard let latest, liveUpdatedAt != nil else { return nil }
-        var fx = latest
-        for q in [Quote.usdTWD, .jpyTWD] { if let v = liveQuotes[q] { fx.quotes[q] = v } }
-        var crypto = fx
-        for q in [Quote.btcUSD, .croUSD] { if let v = liveQuotes[q] { crypto.quotes[q] = v } }
-        var stocks = crypto
-        for (s, q) in liveStocks { stocks.stockPrices[s] = q.price }
-        let base = netWorth(latest)
-        return LiveAttribution(fx: netWorth(fx) - base,
-                               crypto: netWorth(crypto) - netWorth(fx),
-                               stocks: netWorth(stocks) - netWorth(crypto))
     }
 
     /// 最新紀錄裡所有持股的代號

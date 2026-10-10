@@ -99,8 +99,9 @@ struct Persistence {
 
 // MARK: - 匯出／匯入用的文件
 
-struct BackupDocument: FileDocument {
-    static var readableContentTypes: [UTType] { [.json] }
+/// 匯出用的檔案：備份（JSON）或試算表（CSV），內容已經是完整的位元組
+struct ExportDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.json, .commaSeparatedText] }
     var data: Data
 
     init(data: Data) { self.data = data }

@@ -38,7 +38,16 @@ struct HistoryView: View {
         .navigationTitle("歷史紀錄")
         .navigationDestination(for: Snapshot.self) { SnapshotDetailView(snapshot: $0) }
         .toolbar {
-            ToolbarItem(placement: .primaryAction) { UpdateToolbarButton(store: store) }
+            ToolbarItemGroup(placement: .primaryAction) {
+                Menu {
+                    Button("複製為試算表", systemImage: "doc.on.clipboard") { store.copySheetToClipboard() }
+                    Button("匯出 CSV 檔…", systemImage: "square.and.arrow.down") { store.isExportingSheet = true }
+                } label: {
+                    Label("匯出成試算表", systemImage: "tablecells")
+                }
+                .help("匯出所有紀錄，可貼到 Google 試算表")
+                UpdateToolbarButton(store: store)
+            }
         }
         .confirmationDialog("刪除這筆紀錄？", isPresented: .init(get: { pendingDelete != nil },
                                                           set: { if !$0 { pendingDelete = nil } }),

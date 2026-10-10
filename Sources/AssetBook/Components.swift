@@ -18,7 +18,9 @@ enum Fmt {
     }
 
     static func percent(_ v: Double) -> String {
-        (v > 0 ? "+" : "") + v.formatted(.percent.precision(.fractionLength(1)))
+        // 四捨五入後是 0 的就顯示 0.0%，避免出現「-0.0%」
+        if abs(v) < 0.0005 { return 0.0.formatted(.percent.precision(.fractionLength(1))) }
+        return (v > 0 ? "+" : "") + v.formatted(.percent.precision(.fractionLength(1)))
     }
 
     /// 圖表座標軸用：1,099萬、1.1億
