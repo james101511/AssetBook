@@ -512,6 +512,7 @@ struct AccountDetailView: View {
     @Environment(\.dismiss) private var dismiss
     let account: Account
     @State private var editing = false
+    @State private var editingAmount = false
 
     /// 編輯後名稱等資料會更新，所以每次都從 store 取最新的
     private var current: Account { store.account(id: account.id) ?? account }
@@ -599,6 +600,13 @@ struct AccountDetailView: View {
             }
 
             Section(account.category.isLiability ? "帳單紀錄" : "紀錄") {
+                if !account.isPortfolio, !account.isArchived, store.latest != nil {
+                    Button {
+                        editingAmount = true
+                    } label: {
+                        Label(account.category.isLiability ? "輸入應繳金額" : "輸入金額", systemImage: "square.and.pencil")
+                    }
+                }
                 ForEach(rows) { r in
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
@@ -647,9 +655,75 @@ struct AccountDetailView: View {
         .sheet(isPresented: $editing) {
             AccountEditor(account: account).environment(\.portfolio, store)
         }
+        .sheet(isPresented: $editingAmount) {
+            AmountEditor(account: account).environment(\.portfolio, store)
+        }
         .onChange(of: store.account(id: account.id) == nil) { _, deleted in
             if deleted { dismiss() }
         }
+    }
+}
+
+// MARK: - 修改最新一筆紀錄中的金額
+
+/// 直接修改某帳戶在最新紀錄中的金額（帳單、餘額或持有數量），不必走完整的更新流程
+struct AmountEditor: View {
+    @Environment(\.portfolio) private var store
+    @Environment(\.dismiss) private var dismiss
+    let account: Account
+    @State private var text = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    HStack {
+                        TextField("金額", text: $text, prompt: Text("0"))
+                            .focused($focused)
+                            #if os(iOS)
+                            .keyboardType(.decimalPad)
+                            #endif
+                            .multilineTextAlignment(.trailing)
+                            .monospacedDigit()
+                        Text(account.inputUnit).foregroundStyle(.secondary)
+                    }
+                } header: {
+                    if let d = store.latest?.date {
+                        Text("\(d.formatted(.dateTime.year().month().day())) 的紀錄")
+                    }
+                } footer: {
+                    Text(account.category.isLiability ? "這期信用卡帳單的應繳金額；沒有帳單就填 0。" : "會更新最新一筆紀錄中這個帳戶的數字。")
+                }
+            }
+            .formStyle(.grouped)
+            .navigationTitle(account.name)
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("儲存") { save() }.disabled(Fmt.parse(text) == nil)
+                }
+            }
+            .onAppear {
+                if let v = store.latest?.amounts[account.id] {
+                    text = Fmt.number(v, digits: account.inputFractionDigits).replacingOccurrences(of: ",", with: "")
+                }
+                focused = true
+            }
+        }
+        #if os(macOS)
+        .frame(width: 380, height: 260)
+        #endif
+    }
+
+    private func save() {
+        guard var s = store.latest, let v = Fmt.parse(text) else { return }
+        s.amounts[account.id] = v
+        store.save(s)
+        dismiss()
     }
 }
 

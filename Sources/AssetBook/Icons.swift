@@ -125,6 +125,8 @@ enum IconCatalog {
         if name.contains("台股") { return .flag(region: "TW") }
         if name.contains("美股") { return .flag(region: "US") }
         if name.contains("日股") { return .flag(region: "JP") }
+        // 現金、現鈔用該幣別的國旗（台幣現金也有圖示）
+        if name.contains("現金") || name.contains("現鈔") { return .flag(region: region(for: account.currency)) }
         if account.currency != .twd { return .flag(region: region(for: account.currency)) }
         return .monogram
     }

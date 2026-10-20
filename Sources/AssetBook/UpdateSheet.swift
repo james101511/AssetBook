@@ -14,7 +14,8 @@ struct UpdateSheet: View {
     @State private var quoteDrafts: [Quote: String]
     @State private var amountDrafts: [UUID: String]
     @FocusState private var focus: Field?
-    @State private var addingCard = false
+    /// 更新到一半想到少一個帳戶：在這個畫面直接新增，已填的數字不會動
+    @State private var addingCategory: AssetCategory?
 
     // 持股
     @State private var positionDrafts: [UUID: [PositionDraft]]
@@ -240,15 +241,13 @@ struct UpdateSheet: View {
                                     .focused($focus, equals: .account(a.id))
                                     .onSubmit { move(1) }
                             }
-                            if cat.isLiability {
-                                Button {
-                                    addingCard = true
-                                } label: {
-                                    Label("新增信用卡", systemImage: "plus.circle.fill")
-                                        .foregroundStyle(cat.tint)
-                                }
-                                .buttonStyle(.borderless)
+                            Button {
+                                addingCategory = cat
+                            } label: {
+                                Label(cat.addTitle, systemImage: "plus.circle.fill")
+                                    .foregroundStyle(cat.tint)
                             }
+                            .buttonStyle(.borderless)
                         } header: {
                             Text(cat.title)
                         } footer: {
@@ -288,10 +287,10 @@ struct UpdateSheet: View {
         .frame(minWidth: 600, idealWidth: 640, minHeight: 640, idealHeight: 760)
         #endif
         .interactiveDismissDisabled(changedCount > 0)
-        .sheet(isPresented: $addingCard) {
-            AccountEditor(category: .liability) { card in
-                // 新增後直接跳到那張卡的金額欄位
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { focus = .account(card.id) }
+        .sheet(item: $addingCategory) { cat in
+            AccountEditor(category: cat) { account in
+                // 新增後直接跳到那個帳戶的金額欄位
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { focus = .account(account.id) }
             }
             .environment(\.portfolio, store)
         }
@@ -519,8 +518,12 @@ private struct DraftRow: View {
                 Text("上次 \(Fmt.number(previous, digits: previousDigits))")
                 if text.isEmpty, let emptyMeaning {
                     Text(emptyMeaning).fontWeight(.semibold).foregroundStyle(Color.accentColor)
-                } else if isChanged, let parsed, previous != 0 {
-                    Text(Fmt.percent((parsed - previous) / abs(previous)))
+                } else if isChanged, let parsed {
+                    // 上次金額太小或變動超過 ±100% 時，百分比沒有參考價值，改顯示差額
+                    let diff = parsed - previous
+                    let meaningful = abs(previous) >= 1000 && abs(diff / previous) <= 1
+                    Text(meaningful ? Fmt.percent(diff / abs(previous))
+                                    : (diff > 0 ? "+" : "−") + Fmt.number(abs(diff), digits: previousDigits))
                         .fontWeight(.semibold)
                         .foregroundStyle(Color.accentColor)
                 }

@@ -1,7 +1,7 @@
 import SwiftUI
 import Charts
 
-/// 總覽：淨資產與走勢 → 資產組成 → 變動最大、市場
+/// 總覽：淨資產與走勢 → 重點數字（總資產、負債、近期變動）→ 資產組成 → 市場
 struct DashboardView: View {
     @Environment(\.portfolio) private var store
     @Binding var tab: AppTab
@@ -16,13 +16,9 @@ struct DashboardView: View {
                 let comparison = live ? latest : store.snapshot(before: latest)
                 VStack(spacing: 16) {
                     NetWorthCard(snapshot: current, record: latest, comparison: comparison, mode: $mode)
+                    StatStrip(snapshot: current)
                     CompositionCard(snapshot: current, previous: comparison, tab: $tab)
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 420), spacing: 16, alignment: .top)],
-                              spacing: 16) {
-                        MoversCard(snapshot: current, previous: comparison,
-                                   title: live ? "紀錄以來變動最大" : "本期變動最大", tab: $tab)
-                        MarketCard(snapshot: current, previous: comparison)
-                    }
+                    MarketCard(snapshot: current, previous: comparison)
                 }
                 .padding()
                 .frame(maxWidth: 1100)
@@ -82,10 +78,11 @@ private struct NetWorthCard: View {
     @State private var selectedDate: Date?
 
     enum TimeRange: String, CaseIterable, Identifiable {
-        case month = "1個月", quarter = "3個月", year = "1年", all = "全部"
+        case week = "7天", month = "1個月", quarter = "3個月", year = "1年", all = "全部"
         var id: Self { self }
         var days: Int? {
             switch self {
+            case .week: 7
             case .month: 31
             case .quarter: 92
             case .year: 366
@@ -107,7 +104,7 @@ private struct NetWorthCard: View {
         let net = store.netWorth(snapshot)
         let color = trendColor(pts)
 
-        Card {
+        Card(tint: color) {
             HStack(alignment: .center) {
                 status
                 Spacer()
@@ -148,24 +145,58 @@ private struct NetWorthCard: View {
                 .frame(height: 230)
                 .padding(.top, 4)
 
-            HStack(spacing: 4) {
-                ForEach(TimeRange.allCases) { r in
-                    Button {
-                        withAnimation(.snappy) { range = r }
-                    } label: {
-                        Text(r.rawValue)
-                            .font(.caption.weight(.semibold))
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 6)
-                            .background(range == r ? Color.primary.opacity(0.08) : .clear, in: Capsule())
-                            .foregroundStyle(range == r ? .primary : .secondary)
-                            .contentShape(Capsule())
+            VStack(spacing: 8) {
+                HStack(spacing: 4) {
+                    ForEach(TimeRange.allCases) { r in
+                        let redundant = isRedundant(r)
+                        Button {
+                            withAnimation(.snappy) { range = r }
+                        } label: {
+                            Text(r.rawValue)
+                                .font(.caption.weight(.semibold))
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 6)
+                                .background(range == r ? Color.primary.opacity(0.08) : .clear, in: Capsule())
+                                .foregroundStyle(range == r ? AnyShapeStyle(.primary)
+                                                 : redundant ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.secondary))
+                                .contentShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(redundant)
+                        .help(redundant ? "紀錄還不到\(r.rawValue)，內容和「全部」相同" : "")
                     }
-                    .buttonStyle(.plain)
+                }
+                // 這個區間的漲跌：切換範圍時數字會跟著變
+                if let first = pts.first, let last = pts.last, first.date != last.date {
+                    HStack(spacing: 6) {
+                        Text("自 \(first.date.formatted(.dateTime.month(.defaultDigits).day())) 起")
+                            .foregroundStyle(.secondary)
+                        DeltaText(delta: last.value - first.value)
+                            .fontWeight(.semibold)
+                        if first.value != 0 {
+                            Text("(\(Fmt.percent((last.value - first.value) / abs(first.value))))")
+                                .foregroundStyle(store.deltaColor(last.value - first.value))
+                        }
+                    }
+                    .font(.caption)
+                    .monospacedDigit()
                 }
             }
             .frame(maxWidth: .infinity)
         }
+    }
+
+    /// 紀錄的時間跨度（天）
+    private var historyDays: Int {
+        guard let first = store.snapshots.first?.date, let last = store.snapshots.last?.date else { return 0 }
+        return Calendar.current.dateComponents([.day], from: first, to: last).day ?? 0
+    }
+
+    /// 比紀錄還長、而且已經有較短的選項能涵蓋全部紀錄時，這個選項和「全部」完全一樣
+    private func isRedundant(_ r: TimeRange) -> Bool {
+        guard let days = r.days else { return false }
+        let covering = TimeRange.allCases.compactMap(\.days).first { $0 >= historyDays }
+        return covering.map { days > $0 } ?? false
     }
 
     // MARK: 狀態
@@ -301,9 +332,89 @@ private struct NetWorthCard: View {
     }
 }
 
+// MARK: - 一眼看完的數字
+
+private struct StatStrip: View {
+    @Environment(\.portfolio) private var store
+    let snapshot: Snapshot
+
+    var body: some View {
+        let gross = store.grossAssets(snapshot)
+        let debt = -store.total(.liability, in: snapshot)
+        let net = store.netWorth(snapshot)
+        // 約 30 天前的紀錄（沒有那麼久就用最早一筆）
+        let cutoff = Calendar.current.date(byAdding: .day, value: -30, to: snapshot.date) ?? snapshot.date
+        let base = store.snapshots.last { $0.date <= cutoff } ?? store.snapshots.first
+
+        let assets = tile("總資產", "square.stack.3d.up.fill", .blue) {
+            MoneyText(value: gross)
+        } footer: {
+            Text("\(store.activeAccounts.filter { !$0.category.isLiability }.count) 個帳戶")
+        }
+        let liabilities = tile("負債", "creditcard.fill", .red) {
+            MoneyText(value: debt)
+        } footer: {
+            Text(gross > 0 ? "佔總資產 \((debt / gross).formatted(.percent.precision(.fractionLength(1))))" : "—")
+        }
+        let change = tile(base.map { "自 \($0.date.formatted(.dateTime.month(.defaultDigits).day())) 以來" } ?? "近 30 天",
+                 "calendar", .purple) {
+                if let base, base.id != snapshot.id {
+                    DeltaText(delta: net - store.netWorth(base))
+                } else {
+                    Text("—")
+                }
+            } footer: {
+                if let base, base.id != snapshot.id {
+                    let old = store.netWorth(base)
+                    Text(old != 0 ? Fmt.percent((net - old) / abs(old)) : "")
+                }
+            }
+
+        // 寬螢幕：三張等寬一排；窄螢幕：總資產與負債並排，近期變動撐滿一排
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                assets.frame(minWidth: 200)
+                liabilities.frame(minWidth: 200)
+                change.frame(minWidth: 200)
+            }
+            VStack(spacing: 12) {
+                HStack(spacing: 12) { assets; liabilities }
+                change
+            }
+        }
+    }
+
+    private func tile<V: View, F: View>(_ title: String, _ symbol: String, _ color: Color,
+                                         @ViewBuilder value: () -> V, @ViewBuilder footer: () -> F) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: symbol)
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 20, height: 20)
+                    .background(color.gradient, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                Text(title).font(.caption.weight(.medium)).foregroundStyle(.secondary)
+            }
+            value()
+                .font(.system(.title3, design: .rounded).weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .frame(height: 26, alignment: .leading)   // 有頭像的那張也維持同樣高度
+            footer()
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, minHeight: 96, alignment: .topLeading)
+        .background(Color.cardBackground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .shadow(color: .black.opacity(0.04), radius: 8, y: 2)
+    }
+}
+
 // MARK: - 資產組成
 
-/// 像 iPhone「儲存空間」那樣的分段條，下面每個分類（或幣別）一張小卡
+/// 動畫圓環圖＋圖例。滑過或點選某一塊，那一塊會放大發光，中間顯示它的金額與佔比。
 private struct CompositionCard: View {
     @Environment(\.portfolio) private var store
     let snapshot: Snapshot
@@ -311,7 +422,8 @@ private struct CompositionCard: View {
     @Binding var tab: AppTab
 
     @State private var grouping: Grouping = .category
-    @State private var hovered: String?
+    @State private var selected: String?
+    @State private var appeared = false
 
     enum Grouping: String, CaseIterable, Identifiable {
         case category = "分類", currency = "幣別"
@@ -325,6 +437,7 @@ private struct CompositionCard: View {
         let color: Color
         let value: Double
         let previous: Double?
+        let count: Int
         let category: AssetCategory?
     }
 
@@ -334,13 +447,16 @@ private struct CompositionCard: View {
             return AssetCategory.allCases.filter { !$0.isLiability && !store.activeAccounts(in: $0).isEmpty }.map { c in
                 Part(id: c.rawValue, title: c.title, symbol: c.symbol, color: c.tint,
                      value: max(store.total(c, in: snapshot), 0),
-                     previous: previous.map { store.total(c, in: $0) }, category: c)
+                     previous: previous.map { store.total(c, in: $0) },
+                     count: store.activeAccounts(in: c).count, category: c)
             }
         case .currency:
             return Currency.allCases.map { c in
                 Part(id: c.rawValue, title: c.name, symbol: currencySymbol(c), color: c.tint,
                      value: max(store.total(c, in: snapshot), 0),
-                     previous: previous.map { store.total(c, in: $0) }, category: nil)
+                     previous: previous.map { store.total(c, in: $0) },
+                     count: store.activeAccounts.filter { $0.currency == c && !$0.category.isLiability }.count,
+                     category: nil)
             }
             .filter { $0.value > 0 }
         }
@@ -356,26 +472,13 @@ private struct CompositionCard: View {
 
     var body: some View {
         let parts = parts
-        let gross = store.grossAssets(snapshot)
-        let debt = -store.total(.liability, in: snapshot)
+        let gross = max(parts.reduce(0) { $0 + $1.value }, 1)
 
         Card {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("資產組成").font(.headline)
-                    HStack(spacing: 4) {
-                        Text("總資產")
-                        MoneyText(value: gross)
-                        if debt > 0 {
-                            Text("· 負債")
-                            MoneyText(value: debt)
-                        }
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                }
+            HStack(alignment: .center) {
+                Text("資產組成").font(.headline)
                 Spacer()
-                Picker("分組", selection: $grouping.animation(.snappy)) {
+                Picker("分組", selection: $grouping) {
                     ForEach(Grouping.allCases) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented)
@@ -383,165 +486,244 @@ private struct CompositionCard: View {
                 .fixedSize()
             }
 
-            // 分段條
-            GeometryReader { geo in
-                let gap: CGFloat = 3
-                let usable = geo.size.width - gap * CGFloat(max(parts.count - 1, 0))
-                HStack(spacing: gap) {
-                    ForEach(parts) { p in
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(p.color.gradient)
-                            .frame(width: max(usable * p.value / max(gross, 1), 6))
-                            .opacity(hovered == nil || hovered == p.id ? 1 : 0.35)
-                    }
+            // 寬螢幕：圓環在左、圖例在右；窄螢幕：上下排列
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .center, spacing: 36) {
+                    donut(parts, gross: gross).frame(width: 230, height: 230)
+                    legend(parts, gross: gross).frame(minWidth: 340)
+                }
+                VStack(spacing: 22) {
+                    donut(parts, gross: gross).frame(width: 210, height: 210)
+                    legend(parts, gross: gross)
                 }
             }
-            .frame(height: 30)
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .animation(.snappy, value: grouping)
+            .padding(.top, 4)
+        }
+        .onAppear {
+            withAnimation(.spring(duration: 1.0, bounce: 0.1).delay(0.15)) { appeared = true }
+        }
+        .onChange(of: grouping) { _, _ in
+            // 切換分組時重新播放動畫
+            selected = nil
+            appeared = false
+            withAnimation(.spring(duration: 0.9, bounce: 0.1)) { appeared = true }
+        }
+    }
 
-            // 寬螢幕：每個分類一張小卡並排撐滿；窄螢幕：精簡列表
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 10) {
-                    ForEach(parts) { p in
-                        tile(p, gross: gross).frame(minWidth: 170)
+    private func donut(_ parts: [Part], gross: Double) -> some View {
+        let current = parts.first { $0.id == selected }
+        return DonutChart(slices: parts.map { .init(id: $0.id, color: $0.color, value: $0.value) },
+                          selected: $selected, progress: appeared ? 1 : 0)
+            .overlay {
+                VStack(spacing: 3) {
+                    if let current {
+                        Text(current.title)
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.secondary)
+                        CountingMoney(value: current.value, hidden: store.hideAmounts)
+                            .font(.system(size: 21, weight: .bold, design: .rounded))
+                        Text((current.value / gross).formatted(.percent.precision(.fractionLength(1))))
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(current.color)
+                    } else {
+                        Text("總資產")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.secondary)
+                        CountingMoney(value: appeared ? gross : 0, hidden: store.hideAmounts)
+                            .font(.system(size: 21, weight: .bold, design: .rounded))
+                        Text("\(parts.count) 個\(grouping == .category ? "分類" : "幣別")")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
                     }
                 }
-                VStack(spacing: 6) {
-                    ForEach(parts) { p in
-                        tile(p, gross: gross, compact: true)
-                    }
-                }
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+                .padding(.horizontal, 46)
+                .allowsHitTesting(false)
+                .animation(.snappy(duration: 0.25), value: selected)
+            }
+    }
+
+    private func legend(_ parts: [Part], gross: Double) -> some View {
+        VStack(spacing: 4) {
+            ForEach(parts) { p in
+                legendRow(p, share: p.value / gross)
             }
         }
     }
 
-    private func tile(_ p: Part, gross: Double, compact: Bool = false) -> some View {
-        let share = gross > 0 ? p.value / gross : 0
-        let full = VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
+    private func legendRow(_ p: Part, share: Double) -> some View {
+        let isSelected = selected == p.id
+        let row = VStack(spacing: 8) {
+            HStack(spacing: 10) {
                 Image(systemName: p.symbol)
-                    .font(.caption.weight(.semibold))
+                    .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.white)
-                    .frame(width: 20, height: 20)
-                    .background(p.color.gradient, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                Text(p.title).font(.subheadline.weight(.medium))
-                Spacer(minLength: 0)
+                    .frame(width: 28, height: 28)
+                    .background(p.color.gradient, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(p.title).font(.subheadline.weight(.medium))
+                    Text("\(p.count) 個帳戶").font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                VStack(alignment: .trailing, spacing: 1) {
+                    MoneyText(value: p.value).font(.subheadline.weight(.semibold))
+                    HStack(spacing: 6) {
+                        if let old = p.previous {
+                            DeltaText(delta: p.value - old, base: old, showPercentOnly: true)
+                        }
+                        Text(share.formatted(.percent.precision(.fractionLength(0))))
+                            .fontWeight(.semibold)
+                            .foregroundStyle(p.color)
+                    }
+                    .font(.caption)
+                }
                 if p.category != nil {
-                    Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.tertiary)
                 }
             }
-            MoneyText(value: p.value)
-                .font(.system(.title3, design: .rounded).weight(.semibold))
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-            HStack(spacing: 8) {
-                Text(share.formatted(.percent.precision(.fractionLength(0))))
-                    .fontWeight(.semibold)
-                    .foregroundStyle(p.color)
-                if let old = p.previous {
-                    DeltaText(delta: p.value - old, base: old, showPercentOnly: true)
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.primary.opacity(0.06))
+                    Capsule().fill(p.color.gradient)
+                        .frame(width: max(geo.size.width * share * (appeared ? 1 : 0), appeared ? 4 : 0))
                 }
             }
-            .font(.caption)
+            .frame(height: 5)
         }
-        // 窄螢幕的一列：圖示、名稱、佔比｜金額、漲跌
-        let row = HStack(spacing: 10) {
-            Image(systemName: p.symbol)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.white)
-                .frame(width: 26, height: 26)
-                .background(p.color.gradient, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-            VStack(alignment: .leading, spacing: 1) {
-                Text(p.title).font(.subheadline.weight(.medium))
-                Text(share.formatted(.percent.precision(.fractionLength(0))))
-                    .font(.caption.weight(.semibold)).foregroundStyle(p.color)
-            }
-            Spacer(minLength: 8)
-            VStack(alignment: .trailing, spacing: 1) {
-                MoneyText(value: p.value).font(.subheadline.weight(.semibold))
-                if let old = p.previous {
-                    DeltaText(delta: p.value - old, base: old, showPercentOnly: true).font(.caption)
-                }
-            }
-            if p.category != nil {
-                Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
-            }
-        }
-
-        let content = Group {
-            if compact { row } else { full }
-        }
-        .padding(compact ? 10 : 12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(p.color.opacity(hovered == p.id ? 0.14 : 0.08),
-                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(p.color.opacity(isSelected ? 0.10 : 0), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .opacity(selected == nil || isSelected ? 1 : 0.45)
         .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .onHover { inside in withAnimation(.snappy(duration: 0.2)) { hovered = inside ? p.id : nil } }
+        .onHover { inside in
+            withAnimation(.spring(duration: 0.3, bounce: 0.25)) { selected = inside ? p.id : (selected == p.id ? nil : selected) }
+        }
 
         return Group {
             if let category = p.category {
-                Button { tab = .accounts(AccountsFilter(category)) } label: { content }
+                Button { tab = .accounts(AccountsFilter(category)) } label: { row }
                     .buttonStyle(.plain)
                     .help("查看\(category.title)的帳戶")
             } else {
-                content
+                row
             }
         }
     }
 }
 
-// MARK: - 變動最大
+/// 自己畫的圓環圖：每一段是一條圓弧，進場時順時針展開；被選取的那段會變粗、發光，其他變淡
+private struct DonutChart: View {
+    struct Slice: Identifiable {
+        let id: String
+        let color: Color
+        let value: Double
+    }
 
-private struct MoversCard: View {
-    @Environment(\.portfolio) private var store
-    let snapshot: Snapshot
-    let previous: Snapshot?
-    let title: String
-    @Binding var tab: AppTab
+    private struct Arc: Identifiable {
+        let id: String
+        let color: Color
+        let start: CGFloat
+        let end: CGFloat
+    }
 
-    var body: some View {
-        Card(title: title, systemImage: "arrow.up.arrow.down") {
-            if let prev = previous {
-                let movers = store.accounts
-                    .map { ($0, store.value(of: $0, in: snapshot) - store.value(of: $0, in: prev), store.value(of: $0, in: prev)) }
-                    .filter { abs($0.1) >= 1 }
-                    .sorted { abs($0.1) > abs($1.1) }
-                    .prefix(5)
-                if movers.isEmpty {
-                    Text("目前沒有變動。").foregroundStyle(.secondary)
-                }
-                VStack(spacing: 12) {
-                    ForEach(Array(movers), id: \.0.id) { account, delta, base in
-                        HStack(spacing: 10) {
-                            AccountAvatar(account: account, size: 28)
-                            Text(account.name).font(.subheadline).lineLimit(1)
-                            Spacer(minLength: 8)
-                            // 顏色跟著線本身的走勢（第一筆到最後一筆），和線的形狀一致
-                            let series = history(of: account)
-                            Sparkline(values: series, color: store.deltaColor((series.last ?? 0) - (series.first ?? 0)))
-                                .frame(width: 60, height: 22)
-                            DeltaText(delta: delta, base: base)
-                                .font(.subheadline.weight(.medium))
-                                .frame(minWidth: 96, alignment: .trailing)
-                        }
-                    }
-                }
-                Button("查看所有帳戶") { tab = .accounts(.all) }
-                    .buttonStyle(.borderless)
-                    .font(.subheadline)
-            } else {
-                Text("再更新一次就能看到變動。")
-                    .foregroundStyle(.secondary)
-            }
+    let slices: [Slice]
+    @Binding var selected: String?
+    /// 0 → 1：進場動畫的進度
+    var progress: CGFloat
+    var lineWidth: CGFloat = 26
+
+    private var arcs: [Arc] {
+        let total = max(slices.reduce(0) { $0 + $1.value }, 1)
+        var cursor: CGFloat = 0
+        return slices.map { s in
+            let span = CGFloat(s.value / total)
+            defer { cursor += span }
+            return Arc(id: s.id, color: s.color, start: cursor, end: cursor + span)
         }
     }
 
-    /// 各筆紀錄的台幣價值，最後加上目前顯示的快照（即時模式時為即時估值）
-    private func history(of account: Account) -> [Double] {
-        var values = store.snapshots.filter { $0.id != snapshot.id }.map { store.value(of: account, in: $0) }
-        values.append(store.value(of: account, in: snapshot))
-        return values
+    var body: some View {
+        GeometryReader { geo in
+            let side = min(geo.size.width, geo.size.height)
+            // 留空間給選取時變粗的線條和光暈
+            let radius = (side - lineWidth - 18) / 2
+            // 圓頭線帽會往兩端各多畫半個線寬，間隔要把它算進去
+            let gap = (lineWidth + 5) / (2 * .pi * radius)
+            ZStack {
+                Circle()
+                    .stroke(Color.primary.opacity(0.05), lineWidth: lineWidth)
+                    .frame(width: radius * 2, height: radius * 2)
+                ForEach(arcs) { arc in
+                    segment(arc, gap: gap, radius: radius)
+                }
+            }
+            .frame(width: geo.size.width, height: geo.size.height)
+            .contentShape(Circle())
+            .onContinuousHover { phase in
+                switch phase {
+                case .active(let point): select(hit(point, in: geo.size, radius: radius))
+                case .ended: select(nil)
+                }
+            }
+            .onTapGesture { point in
+                let id = hit(point, in: geo.size, radius: radius)
+                select(selected == id ? nil : id)
+            }
+        }
+        .aspectRatio(1, contentMode: .fit)
+        .animation(.spring(duration: 0.6, bounce: 0.1), value: slices.map(\.value))
+    }
+
+    @ViewBuilder private func segment(_ arc: Arc, gap: CGFloat, radius: CGFloat) -> some View {
+        let isSelected = selected == arc.id
+        let span = arc.end - arc.start
+        // 太小的一段放不下圓頭，改用平頭細線，至少看得到
+        let tiny = span <= gap * 1.3
+        let inset = tiny ? min(span * 0.15, 0.002) : gap / 2
+        let from = (arc.start + inset) * progress
+        let to = max((arc.end - inset) * progress, from)
+        Circle()
+            .trim(from: from, to: to)
+            .stroke(arc.color.gradient,
+                    style: StrokeStyle(lineWidth: isSelected ? lineWidth + 7 : lineWidth, lineCap: tiny ? .butt : .round))
+            .frame(width: radius * 2, height: radius * 2)
+            .rotationEffect(.degrees(-90))
+            .shadow(color: arc.color.opacity(isSelected ? 0.45 : 0), radius: 10)
+            .opacity(selected == nil || isSelected ? 1 : 0.28)
+    }
+
+    private func select(_ id: String?) {
+        guard id != selected else { return }
+        withAnimation(.spring(duration: 0.35, bounce: 0.3)) { selected = id }
+    }
+
+    /// 滑鼠或手指的位置落在哪一段（不在圓環上就回傳 nil）
+    private func hit(_ point: CGPoint, in size: CGSize, radius: CGFloat) -> String? {
+        let dx = point.x - size.width / 2, dy = point.y - size.height / 2
+        let distance = sqrt(dx * dx + dy * dy)
+        guard abs(distance - radius) <= lineWidth / 2 + 10 else { return nil }
+        var fraction = atan2(dx, -dy) / (2 * .pi)   // 從 12 點鐘方向順時針
+        if fraction < 0 { fraction += 1 }
+        return arcs.first { fraction >= $0.start && fraction < $0.end }?.id
+    }
+}
+
+/// 會跟著動畫逐格跳動的金額（圓環中間的數字）
+private struct CountingMoney: View, Animatable {
+    var value: Double
+    var hidden: Bool
+
+    var animatableData: Double {
+        get { value }
+        set { value = newValue }
+    }
+
+    var body: some View {
+        Text(hidden ? "••••••" : Fmt.money(value, .twd))
+            .monospacedDigit()
     }
 }
 
@@ -553,43 +735,85 @@ private struct MarketCard: View {
     let snapshot: Snapshot
     let previous: Snapshot?
 
+    private struct Item: Identifiable {
+        let id: String
+        let title: String
+        let badge: AnyView
+        let value: Double
+        let prefix: String
+        let old: Double?
+        let series: [Double]
+    }
+
+    private var items: [Item] {
+        var out = Quote.allCases.map { q -> Item in
+            let value = snapshot.quotes[q] ?? 0
+            var series = store.snapshots.filter { $0.id != snapshot.id }.compactMap { $0.quotes[q] }
+            series.append(value)
+            return Item(id: q.id, title: q.title, badge: AnyView(Image(systemName: q.symbol).foregroundStyle(.secondary)),
+                        value: value, prefix: "", old: previous?.quotes[q], series: series)
+        }
+        // 持股的現價（即時模式為即時股價，否則為該筆紀錄的股價）
+        var seen = Set<String>()
+        for p in snapshot.holdings.values.flatMap({ $0 }) where seen.insert(p.symbol).inserted {
+            guard let price = snapshot.stockPrices[p.symbol] else { continue }
+            var series = store.snapshots.filter { $0.id != snapshot.id }.compactMap { $0.stockPrices[p.symbol] }
+            series.append(price)
+            let cur = store.liveStocks[p.symbol]?.currency ?? Self.guessCurrency(p.symbol)
+            out.append(Item(id: p.symbol, title: p.name.isEmpty ? StockService.displaySymbol(p.symbol) : p.name,
+                            badge: AnyView(Text(StockService.displaySymbol(p.symbol))
+                                .font(.caption2.weight(.semibold)).foregroundStyle(AssetCategory.stocks.tint)),
+                            value: price, prefix: cur.symbol, old: previous?.stockPrices[p.symbol], series: series))
+        }
+        return out
+    }
+
+    private static func guessCurrency(_ symbol: String) -> Currency {
+        if symbol.hasSuffix(".TW") || symbol.hasSuffix(".TWO") { return .twd }
+        if symbol.hasSuffix(".T") { return .jpy }
+        return .usd
+    }
+
     var body: some View {
         Card(title: "市場", systemImage: "chart.xyaxis.line") {
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
-                ForEach(Quote.allCases) { q in
-                    tile(q)
+            let items = items
+            // 寬螢幕三張一排，窄螢幕兩排
+            ViewThatFits(in: .horizontal) {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4), spacing: 10) {
+                    ForEach(items) { tile($0) }
+                }
+                .frame(minWidth: 760)
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+                    ForEach(items) { tile($0) }
                 }
             }
         }
     }
 
-    private func tile(_ q: Quote) -> some View {
-        let value = snapshot.quotes[q] ?? 0
-        let old = previous?.quotes[q]
-        var series = store.snapshots.filter { $0.id != snapshot.id }.compactMap { $0.quotes[q] }
-        series.append(value)
-        let change = old.map { value - $0 } ?? 0
+    private func tile(_ item: Item) -> some View {
+        let change = item.old.map { item.value - $0 } ?? 0
+        let value = item.value
 
         return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
-                Image(systemName: q.symbol).foregroundStyle(.secondary)
-                Text(q.title).font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                item.badge
+                Text(item.title).font(.caption.weight(.medium)).foregroundStyle(.secondary).lineLimit(1)
                 Spacer(minLength: 0)
             }
             HStack(alignment: .bottom) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(Fmt.number(value, digits: 0...(value < 1 ? 5 : value < 100 ? 3 : 0)))
+                    Text(item.prefix + Fmt.number(value, digits: 0...(value < 1 ? 5 : value < 100 ? 3 : 0)))
                         .font(.system(.headline, design: .rounded).monospacedDigit())
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
-                    if let old, old != 0 {
+                    if let old = item.old, old != 0 {
                         Text(Fmt.percent(change / old))
                             .font(.caption.weight(.semibold).monospacedDigit())
                             .foregroundStyle(store.deltaColor(change))
                     }
                 }
                 Spacer(minLength: 4)
-                Sparkline(values: series, color: store.deltaColor((series.last ?? 0) - (series.first ?? 0)))
+                Sparkline(values: item.series, color: store.deltaColor((item.series.last ?? 0) - (item.series.first ?? 0)))
                     .frame(width: 52, height: 26)
             }
         }

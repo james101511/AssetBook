@@ -152,6 +152,8 @@ struct DeltaText: View {
 struct Card<Content: View>: View {
     var title: String?
     var systemImage: String?
+    /// 左上角淡淡的色暈（例如跟著漲跌顏色）
+    var tint: Color?
     @ViewBuilder var content: Content
 
     var body: some View {
@@ -163,9 +165,20 @@ struct Card<Content: View>: View {
             }
             content
         }
-        .padding(18)
+        .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.cardBackground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(Color.cardBackground)
+                .overlay {
+                    if let tint {
+                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            .fill(LinearGradient(colors: [tint.opacity(0.10), tint.opacity(0)],
+                                                 startPoint: .topLeading, endPoint: .center))
+                    }
+                }
+                .shadow(color: .black.opacity(0.05), radius: 10, y: 3)
+        }
     }
 }
 
