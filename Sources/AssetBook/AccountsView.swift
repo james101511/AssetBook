@@ -17,33 +17,13 @@ struct AccountsView: View {
     @State private var showArchived = false
 
     var body: some View {
-        List {
-            if showsPicker {
-                Section {
-                    Picker("分類", selection: $filter.animation(.snappy)) {
-                        ForEach(AccountsFilter.allCases) { Text($0.shortTitle).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                }
-                .listRowBackground(Color.clear)
-                .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
-            }
-
-            if let latest = store.latest {
-                let prev = store.snapshot(before: latest)
-                if let cat = filter.category {
-                    categoryPage(cat, latest: latest, prev: prev)
-                } else {
-                    overviewPage(latest: latest, prev: prev)
-                }
+        Group {
+            if filter.category == nil, let latest = store.latest {
+                overviewScroll(latest: latest, prev: store.snapshot(before: latest))
+            } else {
+                categoryList
             }
         }
-        #if os(iOS)
-        .listStyle(.insetGrouped)
-        #else
-        .listStyle(.inset)
-        #endif
         .navigationTitle(showsPicker ? "帳戶" : filter.title)
         .navigationDestination(for: Account.self) { AccountDetailView(account: $0) }
         .toolbar {
@@ -72,48 +52,93 @@ struct AccountsView: View {
         }
     }
 
+    private var categoryList: some View {
+        List {
+            if showsPicker {
+                Section {
+                    Picker("分類", selection: $filter.animation(.snappy)) {
+                        ForEach(AccountsFilter.allCases) { Text($0.shortTitle).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                }
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+            }
+
+            if let latest = store.latest, let cat = filter.category {
+                categoryPage(cat, latest: latest, prev: store.snapshot(before: latest))
+            }
+        }
+        #if os(iOS)
+        .listStyle(.insetGrouped)
+        #else
+        .listStyle(.inset)
+        #endif
+    }
+
     // MARK: 全部
 
-    @ViewBuilder private func overviewPage(latest: Snapshot, prev: Snapshot?) -> some View {
-        Section {
-            BalanceSummary(snapshot: latest, previous: prev)
-        }
-
-        Section {
-            ForEach(AssetCategory.allCases.filter { !store.activeAccounts(in: $0).isEmpty }) { cat in
-                Button {
-                    withAnimation(.snappy) { filter = AccountsFilter(cat) }
-                } label: {
-                    CategorySummaryRow(category: cat, snapshot: latest, previous: prev)
+    private func overviewScroll(latest: Snapshot, prev: Snapshot?) -> some View {
+        let cats = AssetCategory.allCases.filter { !store.activeAccounts(in: $0).isEmpty }
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                if showsPicker {
+                    Picker("分類", selection: $filter.animation(.snappy)) {
+                        ForEach(AccountsFilter.allCases) { Text($0.shortTitle).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
                 }
-                .buttonStyle(.plain)
-            }
-        } header: {
-            Text("分類")
-        } footer: {
-            Text("點分類查看帳戶明細。⌘1–⌘5 可快速切換。")
-        }
 
-        if !store.archivedAccounts.isEmpty {
-            Section {
-                DisclosureGroup(isExpanded: $showArchived) {
-                    ForEach(store.archivedAccounts) { account in
-                        NavigationLink(value: account) {
-                            AccountRow(account: account, snapshot: latest, previous: nil)
-                        }
-                        .contextMenu { actions(for: account) }
-                        .swipeActions {
-                            Button("取消封存", systemImage: "tray.and.arrow.up") { store.setArchived(account, false) }
+                Card { BalanceSummary(snapshot: latest, previous: prev) }
+
+                Card {
+                    CategoryTableHeader(previous: prev)
+                    VStack(spacing: 0) {
+                        ForEach(Array(cats.enumerated()), id: \.element.id) { i, cat in
+                            if i > 0 { Divider().opacity(0.6) }
+                            Button {
+                                withAnimation(.snappy) { filter = AccountsFilter(cat) }
+                            } label: {
+                                CategorySummaryRow(category: cat, snapshot: latest, previous: prev)
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
-                } label: {
-                    Label("已封存（\(store.archivedAccounts.count)）", systemImage: "archivebox")
-                        .foregroundStyle(.secondary)
                 }
-            } footer: {
-                Text("封存的帳戶不會出現在更新畫面，但過去的紀錄會保留，淨資產歷史不受影響。")
+
+                Text("點分類查看帳戶明細，⌘1–⌘5 快速切換")
+                    .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                    .padding(.horizontal, 4)
+
+                if !store.archivedAccounts.isEmpty {
+                    Card {
+                        DisclosureGroup(isExpanded: $showArchived) {
+                            VStack(spacing: 0) {
+                                ForEach(store.archivedAccounts) { account in
+                                    NavigationLink(value: account) {
+                                        AccountRow(account: account, snapshot: latest, previous: nil)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .contextMenu { actions(for: account) }
+                                }
+                            }
+                            .padding(.top, 8)
+                        } label: {
+                            Label("已封存（\(store.archivedAccounts.count)）", systemImage: "archivebox")
+                                .foregroundStyle(.secondary)
+                        }
+                        Text("封存的帳戶不會出現在更新畫面，過去的紀錄會保留，淨資產歷史不受影響。")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
             }
+            .padding()
+            .frame(maxWidth: 1100)
+            .frame(maxWidth: .infinity)
         }
+        .background(Color.groupedBackground)
     }
 
     // MARK: 單一分類
@@ -125,49 +150,79 @@ struct AccountsView: View {
             CategoryOverview(category: cat, snapshot: latest, previous: prev)
         }
 
-        Section {
-            if items.isEmpty {
-                Text(cat.isLiability ? "還沒有信用卡。" : "這個分類還沒有帳戶。")
-                    .foregroundStyle(.secondary)
-            }
-            ForEach(items) { account in
-                NavigationLink(value: account) {
-                    AccountRow(account: account, snapshot: latest, previous: prev)
+        if cat == .cash, !items.isEmpty {
+            // 現金與存款分成子分類（銀行、交易所與穩定幣、現鈔與儲值）：
+            // 子分類是一列，底下縮排列出它的帳戶，和股票頁的持股一樣
+            Section {
+                ForEach(CashGroup.allCases.filter { g in items.contains { $0.resolvedCashGroup == g } }) { g in
+                    let group = items.filter { $0.resolvedCashGroup == g }
+                    CashGroupRow(group: g, accounts: group, snapshot: latest, previous: prev)
+                    accountRows(group, latest: latest, prev: prev, indent: 48)
                 }
-                .contextMenu { actions(for: account) }
-                .swipeActions(edge: .trailing) {
-                    Button("封存", systemImage: "archivebox") { store.setArchived(account, true) }
-                        .tint(.gray)
-                    Button("編輯", systemImage: "pencil") { editing = account }
-                        .tint(.accentColor)
+                Button {
+                    adding = cat
+                } label: {
+                    Label(cat.addTitle, systemImage: "plus.circle.fill")
+                        .foregroundStyle(cat.tint)
                 }
-                // 股票帳戶直接展開持股
-                if account.isPortfolio {
-                    ForEach(latest.holdings[account.id] ?? []) { p in
-                        PositionLine(position: p, account: account, snapshot: latest)
-                    }
+                .buttonStyle(.borderless)
+            } header: {
+                if let prev {
+                    Text("右側漲跌為與 \(prev.date.formatted(.dateTime.month(.defaultDigits).day())) 相比")
+                        .textCase(nil)
                 }
             }
-            if cat == .stocks {
-                ConvertToPortfolioPrompt(accounts: items.filter { !$0.isPortfolio })
+        } else {
+            Section {
+                if items.isEmpty {
+                    Text(cat.isLiability ? "還沒有信用卡。" : "這個分類還沒有帳戶。")
+                        .foregroundStyle(.secondary)
+                }
+                accountRows(items, latest: latest, prev: prev)
+                if cat == .stocks {
+                    ConvertToPortfolioPrompt(accounts: items.filter { !$0.isPortfolio })
+                }
+                Button {
+                    adding = cat
+                } label: {
+                    Label(cat.addTitle, systemImage: "plus.circle.fill")
+                        .foregroundStyle(cat.tint)
+                }
+                .buttonStyle(.borderless)
+            } header: {
+                if let prev {
+                    Text("右側漲跌為與 \(prev.date.formatted(.dateTime.month(.defaultDigits).day())) 相比")
+                        .textCase(nil)
+                }
+            } footer: {
+                if cat.isLiability {
+                    Text("這期沒有帳單的卡，在「更新資產」時按「無帳單」即可，不必刪除。")
+                } else if cat == .stocks, items.contains(where: \.isPortfolio) {
+                    Text("持股顯示的是紀錄時的股價；即時股價請看總覽或帳戶明細。")
+                }
             }
-            Button {
-                adding = cat
-            } label: {
-                Label(cat.addTitle, systemImage: "plus.circle.fill")
-                    .foregroundStyle(cat.tint)
+        }
+    }
+
+    @ViewBuilder private func accountRows(_ list: [Account], latest: Snapshot, prev: Snapshot?,
+                                          indent: CGFloat = 0) -> some View {
+        ForEach(list) { account in
+            NavigationLink(value: account) {
+                AccountRow(account: account, snapshot: latest, previous: prev, nested: indent > 0)
+                    .padding(.leading, indent)
             }
-            .buttonStyle(.borderless)
-        } header: {
-            if let prev {
-                Text("右側漲跌為與 \(prev.date.formatted(.dateTime.month(.defaultDigits).day())) 相比")
-                    .textCase(nil)
+            .contextMenu { actions(for: account) }
+            .swipeActions(edge: .trailing) {
+                Button("封存", systemImage: "archivebox") { store.setArchived(account, true) }
+                    .tint(.gray)
+                Button("編輯", systemImage: "pencil") { editing = account }
+                    .tint(.accentColor)
             }
-        } footer: {
-            if cat.isLiability {
-                Text("這期沒有帳單的卡，在「更新資產」時按「無帳單」即可，不必刪除。")
-            } else if cat == .stocks, items.contains(where: \.isPortfolio) {
-                Text("持股顯示的是紀錄時的股價；即時股價請看總覽或帳戶明細。")
+            // 股票帳戶直接展開持股
+            if account.isPortfolio {
+                ForEach(latest.holdings[account.id] ?? []) { p in
+                    PositionLine(position: p, account: account, snapshot: latest)
+                }
             }
         }
     }
@@ -184,6 +239,39 @@ struct AccountsView: View {
 
 // MARK: - 「全部」裡的分類摘要列
 
+/// 分類表的欄位標題：金額、佔比、和上一筆紀錄比的漲跌
+private struct CategoryTableHeader: View {
+    let previous: Snapshot?
+
+    private var versus: String {
+        previous.map { "vs \($0.date.formatted(.dateTime.month(.defaultDigits).day()))" } ?? ""
+    }
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 0) {
+                Text("分類")
+                Spacer(minLength: 0)
+                Text("金額").frame(width: 140, alignment: .trailing)
+                Text("佔比").frame(width: 64, alignment: .trailing)
+                Text(versus).frame(width: 110, alignment: .trailing)
+                Color.clear.frame(width: 24, height: 1)
+            }
+            .frame(minWidth: 620)
+            HStack {
+                Text("分類")
+                Spacer()
+                Text(previous == nil ? "金額" : "金額 · 佔比 · \(versus)")
+            }
+        }
+        .font(.caption)
+        .monospacedDigit()
+        .foregroundStyle(.secondary)
+        .padding(.bottom, 10)
+        .overlay(alignment: .bottom) { Divider().opacity(0.6) }
+    }
+}
+
 private struct CategorySummaryRow: View {
     @Environment(\.portfolio) private var store
     let category: AssetCategory
@@ -197,52 +285,79 @@ private struct CategorySummaryRow: View {
         // 金額最大的 3 個帳戶
         let top = accounts.sorted { abs(store.value(of: $0, in: snapshot)) > abs(store.value(of: $1, in: snapshot)) }.prefix(3)
 
-        HStack(spacing: 14) {
+        let title = HStack(spacing: 12) {
             Image(systemName: category.symbol)
-                .font(.title3)
-                .foregroundStyle(.white)
-                .frame(width: 42, height: 42)
-                .background(category.tint.gradient, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
-            VStack(alignment: .leading, spacing: 5) {
-                Text(category.title).font(.headline)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .frame(width: 36, height: 36)
+                .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            VStack(alignment: .leading, spacing: 6) {
+                Text(category.title).font(.body.weight(.medium))
                 HStack(spacing: 0) {
                     ForEach(Array(top.enumerated()), id: \.element.id) { i, a in
-                        AccountAvatar(account: a, size: 20)
+                        AccountAvatar(account: a, size: 18)
                             .padding(1.5)
-                            .background(Color.cardBackground, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                            .background(Color.cardBackground, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                             .padding(.leading, i == 0 ? 0 : -6)
                             .zIndex(Double(3 - i))
                     }
                     Text("\(accounts.count) 個\(category.isLiability ? "卡片" : "帳戶")")
-                        .font(.caption)
+                        .font(.caption).monospacedDigit()
                         .foregroundStyle(.secondary)
                         .padding(.leading, 8)
+                        .fixedSize()
                 }
             }
-            Spacer(minLength: 8)
-            VStack(alignment: .trailing, spacing: 4) {
-                MoneyText(value: abs(total)).font(.headline)
-                HStack(spacing: 8) {
-                    if !category.isLiability, gross > 0 {
-                        Text("佔 \((total / gross).formatted(.percent.precision(.fractionLength(0))))")
-                            .foregroundStyle(.secondary)
-                    }
-                    if let previous {
-                        let old = store.total(category, in: previous)
-                        if category.isLiability {
-                            LiabilityChange(now: abs(total), before: abs(old))
-                        } else {
-                            DeltaText(delta: total - old, base: old, showPercentOnly: true)
-                        }
-                    }
-                }
-                .font(.caption)
-            }
-            Image(systemName: "chevron.right")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.tertiary)
         }
-        .padding(.vertical, 6)
+
+        let share = Group {
+            if !category.isLiability, gross > 0 {
+                Text((total / gross).formatted(.percent.precision(.fractionLength(0))))
+            } else {
+                Text("—")
+            }
+        }
+        .foregroundStyle(.secondary)
+
+        let change = Group {
+            if let previous {
+                let old = store.total(category, in: previous)
+                if category.isLiability {
+                    LiabilityChange(now: abs(total), before: abs(old))
+                } else {
+                    DeltaText(delta: total - old, base: old, showPercentOnly: true)
+                }
+            }
+        }
+
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 0) {
+                title
+                Spacer(minLength: 8)
+                MoneyText(value: abs(total)).font(.system(size: 17)).frame(width: 140, alignment: .trailing)
+                share.font(.callout).monospacedDigit().frame(width: 64, alignment: .trailing)
+                change.font(.callout).monospacedDigit().frame(width: 110, alignment: .trailing)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+                    .frame(width: 24, alignment: .trailing)
+            }
+            .frame(minWidth: 620)
+            HStack(spacing: 8) {
+                title
+                Spacer(minLength: 8)
+                VStack(alignment: .trailing, spacing: 4) {
+                    MoneyText(value: abs(total)).font(.system(size: 17))
+                    HStack(spacing: 8) {
+                        if !category.isLiability, gross > 0 { share }
+                        change
+                    }
+                    .font(.caption).monospacedDigit()
+                }
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.vertical, 14)
         .contentShape(Rectangle())
     }
 }
@@ -264,7 +379,7 @@ private struct CategoryOverview: View {
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(category.tint)
             MoneyText(value: abs(total))
-                .font(.system(size: 32, weight: .bold, design: .rounded))
+                .font(.system(size: 32, weight: .regular))
             HStack(spacing: 10) {
                 if let previous {
                     let old = store.total(category, in: previous)
@@ -287,6 +402,42 @@ private struct CategoryOverview: View {
             .font(.subheadline)
         }
         .padding(.vertical, 6)
+    }
+}
+
+/// 現金分頁裡的子分類列：和股票頁的「台股」「美股」一樣，底下縮排列出帳戶
+private struct CashGroupRow: View {
+    @Environment(\.portfolio) private var store
+    let group: CashGroup
+    let accounts: [Account]
+    let snapshot: Snapshot
+    let previous: Snapshot?
+
+    var body: some View {
+        let total = accounts.reduce(0) { $0 + store.value(of: $1, in: snapshot) }
+        let old = previous.map { p in accounts.reduce(0) { $0 + store.value(of: $1, in: p) } }
+        let cash = store.total(.cash, in: snapshot)
+        HStack(spacing: 12) {
+            Image(systemName: group.symbol)
+                .font(.title3)
+                .foregroundStyle(.secondary)
+                .frame(width: 36, height: 36)
+                .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(group.title).font(.body.weight(.medium))
+                Text("\(accounts.count) 個帳戶" + (cash > 0 ? " · 佔 \((total / cash).formatted(.percent.precision(.fractionLength(0))))" : ""))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            VStack(alignment: .trailing, spacing: 2) {
+                MoneyText(value: total).font(.title3.weight(.semibold))
+                if let old {
+                    DeltaText(delta: total - old, base: old, showPercentOnly: true).font(.caption)
+                }
+            }
+        }
+        .padding(.vertical, 3)
     }
 }
 
@@ -352,75 +503,71 @@ private struct BalanceSummary: View {
             .map { ($0, max(store.total($0, in: snapshot), 0)) }
             .filter { $0.1 > 0 }
 
-        VStack(alignment: .leading, spacing: 14) {
-            ViewThatFits(in: .horizontal) {
-                HStack(alignment: .firstTextBaseline, spacing: 14) { equation(gross, debt, net) }
-                // 窄螢幕：淨資產放大在上，資產與負債並排在下
-                VStack(alignment: .leading, spacing: 10) {
-                    figure("淨資產", net, emphasized: true)
-                    HStack(alignment: .firstTextBaseline, spacing: 12) {
-                        figure("資產", gross)
-                        op("−")
-                        figure("負債", debt)
-                    }
-                }
-            }
-
-            // 分類比例條
-            GeometryReader { geo in
-                HStack(spacing: 2) {
-                    ForEach(parts, id: \.0) { cat, v in
-                        Rectangle().fill(cat.tint.gradient)
-                            .frame(width: max(geo.size.width * v / gross - 2, 2))
-                    }
-                }
-                .clipShape(Capsule())
-            }
-            .frame(height: 10)
-
-            HStack(spacing: 14) {
-                ForEach(parts, id: \.0) { cat, v in
-                    HStack(spacing: 5) {
-                        Circle().fill(cat.tint).frame(width: 7, height: 7)
-                        Text(cat.title)
-                        Text((v / gross).formatted(.percent.precision(.fractionLength(0))))
-                            .foregroundStyle(.secondary)
-                    }
+        VStack(alignment: .leading, spacing: 20) {
+            // 淨資產是主角；資產與負債是它的組成
+            VStack(alignment: .leading, spacing: 6) {
+                Text("淨資產").font(.subheadline).foregroundStyle(.secondary)
+                MoneyText(value: net)
+                    .font(.system(size: 36, weight: .regular))
                     .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                if let previous {
+                    let old = store.netWorth(previous)
+                    HStack(spacing: 8) {
+                        DeltaBadge(delta: net - old, base: old)
+                        Text("vs \(previous.date.formatted(.dateTime.month(.defaultDigits).day()))")
+                            .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                    }
                 }
-                Spacer(minLength: 0)
             }
-            .font(.caption)
 
-            if let previous {
-                Label("右側的漲跌都是與 \(previous.date.formatted(.dateTime.month(.defaultDigits).day())) 相比（以台幣計）",
-                      systemImage: "info.circle")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            HStack(alignment: .top, spacing: 0) {
+                part("資產", gross)
+                part("負債", debt, minus: true)
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                // 資產分類比例
+                GeometryReader { geo in
+                    HStack(spacing: 2) {
+                        ForEach(parts, id: \.0) { cat, v in
+                            Rectangle().fill(cat.tint)
+                                .frame(width: max(geo.size.width * v / gross - 2, 2))
+                        }
+                    }
+                    .clipShape(Capsule())
+                }
+                .frame(height: 6)
+
+                HStack(spacing: 16) {
+                    ForEach(parts, id: \.0) { cat, v in
+                        HStack(spacing: 6) {
+                            Circle().fill(cat.tint).frame(width: 6, height: 6)
+                            Text(cat.title).foregroundStyle(.secondary)
+                            Text((v / gross).formatted(.percent.precision(.fractionLength(0))))
+                                .monospacedDigit()
+                        }
+                        .lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .font(.caption)
             }
         }
-        .padding(.vertical, 6)
     }
 
-    @ViewBuilder private func equation(_ gross: Double, _ debt: Double, _ net: Double) -> some View {
-        figure("資產", gross)
-        op("−")
-        figure("負債", debt)
-        op("=")
-        figure("淨資產", net, emphasized: true)
-    }
-
-    private func figure(_ title: String, _ value: Double, emphasized: Bool = false) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
+    private func part(_ title: String, _ value: Double, minus: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
             Text(title).font(.caption).foregroundStyle(.secondary)
-            MoneyText(value: value)
-                .font(emphasized ? .title2.weight(.bold) : .title3.weight(.medium))
-                .lineLimit(1)
+            HStack(spacing: 4) {
+                if minus { Text("−").foregroundStyle(.tertiary) }
+                MoneyText(value: value)
+            }
+            .font(.system(size: 20, weight: .regular))
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
         }
-    }
-
-    private func op(_ s: String) -> some View {
-        Text(s).font(.title3).foregroundStyle(.tertiary)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -431,15 +578,17 @@ struct AccountRow: View {
     let account: Account
     let snapshot: Snapshot
     let previous: Snapshot?
+    /// 縮排在子分類底下時，字和圖示都小一點、金額用次要色，讓子分類的小計更突出
+    var nested = false
 
     var body: some View {
         let hasAmount = snapshot.amounts[account.id].map { $0 != 0 } ?? false
         let value = store.value(of: account, in: snapshot)
 
         HStack(spacing: 12) {
-            AccountAvatar(account: account)
+            AccountAvatar(account: account, size: nested ? 30 : 36)
             VStack(alignment: .leading, spacing: 2) {
-                Text(account.name)
+                Text(account.name).font(nested ? .subheadline : .body)
                 if let subtitle {
                     Text(subtitle)
                         .font(.caption)
@@ -453,8 +602,12 @@ struct AccountRow: View {
                     Text("本期無帳單").foregroundStyle(.secondary)
                 } else {
                     // 負債顯示為正的應繳金額，比較直覺
-                    MoneyText(value: account.category.isLiability ? abs(value) : value)
-                        .fontWeight(.medium)
+                    if nested {
+                        MoneyText(value: value).font(.subheadline).foregroundStyle(.secondary)
+                    } else {
+                        MoneyText(value: account.category.isLiability ? abs(value) : value)
+                            .fontWeight(.medium)
+                    }
                 }
                 change.font(.caption)
             }
@@ -547,7 +700,7 @@ struct AccountDetailView: View {
                         // 會隨市場變動的帳戶顯示即時估值，和下方持股的即時股價一致
                         if let shown = (store.isMarketLinked(account) ? store.liveSnapshot : nil) ?? store.latest {
                             MoneyText(value: abs(store.value(of: account, in: shown)))
-                                .font(.system(size: 30, weight: .bold, design: .rounded))
+                                .font(.system(size: 30, weight: .regular))
                             if account.currency != .twd || account.valuation != .balance {
                                 MoneyText(value: store.nativeValue(of: account, in: shown) ?? 0, currency: account.currency)
                                     .foregroundStyle(.secondary)
@@ -745,6 +898,8 @@ struct AccountEditor: View {
     @State private var holding: Quote?
     /// 股票帳戶：記錄每檔股數，股價自動更新
     @State private var usesPortfolio: Bool
+    /// 現金子分類；nil 為自動判斷
+    @State private var cashGroup: CashGroup?
     @State private var confirmDelete = false
 
     // 圖示
@@ -803,6 +958,7 @@ struct AccountEditor: View {
         _category = State(initialValue: account?.category ?? category)
         _currency = State(initialValue: account?.currency ?? .twd)
         _usesPortfolio = State(initialValue: account.map(\.isPortfolio) ?? (category == .stocks))
+        _cashGroup = State(initialValue: account?.cashGroup)
         if case .holding(let q) = account?.valuation {
             _holding = State(initialValue: q)
         } else {
@@ -908,6 +1064,12 @@ struct AccountEditor: View {
                     Picker("分類", selection: $category) {
                         ForEach(AssetCategory.allCases) { Label($0.title, systemImage: $0.symbol).tag($0) }
                     }
+                    if category == .cash {
+                        Picker("子分類", selection: $cashGroup) {
+                            Text("自動").tag(CashGroup?.none)
+                            ForEach(CashGroup.allCases) { Label($0.title, systemImage: $0.symbol).tag(CashGroup?.some($0)) }
+                        }
+                    }
                     if category == .stocks && (isNew || account?.valuation == .balance) {
                         Picker("計價方式", selection: $usesPortfolio) {
                             Text("持股明細（自動更新股價）").tag(true)
@@ -1005,6 +1167,7 @@ struct AccountEditor: View {
             a.name = trimmedName
             a.note = note
             a.category = category
+            a.cashGroup = category == .cash ? cashGroup : nil
             a.icon = resolvedIcon
             if a.category == .stocks && a.valuation == .balance && usesPortfolio {
                 a.valuation = .portfolio
@@ -1013,6 +1176,7 @@ struct AccountEditor: View {
         } else {
             var a = draftAccount(icon: resolvedIcon)
             a.name = trimmedName
+            a.cashGroup = category == .cash ? cashGroup : nil
             store.add(a)
             onCreate?(a)
         }

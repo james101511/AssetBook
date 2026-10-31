@@ -47,25 +47,84 @@ enum Fmt {
     }
 }
 
-// MARK: - 平台顏色
+// MARK: - 外觀
 
-extension Color {
-    static var groupedBackground: Color {
-        #if os(iOS)
-        Color(uiColor: .systemGroupedBackground)
-        #else
-        Color(nsColor: .windowBackgroundColor)
-        #endif
+enum Appearance: String, Codable, CaseIterable, Identifiable {
+    case system, light, dark
+    var id: Self { self }
+    var title: String {
+        switch self {
+        case .system: "自動"
+        case .light: "淺色"
+        case .dark: "深色"
+        }
+    }
+    var scheme: ColorScheme? {
+        switch self {
+        case .system: nil
+        case .light: .light
+        case .dark: .dark
+        }
     }
 
-    static var cardBackground: Color {
-        #if os(iOS)
-        Color(uiColor: .secondarySystemGroupedBackground)
-        #else
-        Color(nsColor: .controlBackgroundColor)
+    /// macOS 上 preferredColorScheme 切回「自動」時不會還原，所以直接設定整個 App 的外觀
+    func apply() {
+        #if os(macOS)
+        switch self {
+        case .system: NSApp?.appearance = nil
+        case .light: NSApp?.appearance = NSAppearance(named: .aqua)
+        case .dark: NSApp?.appearance = NSAppearance(named: .darkAqua)
+        }
         #endif
     }
 }
+
+// MARK: - 平台顏色
+
+extension Color {
+    /// 淺色：系統灰白；深色：石墨灰，卡片只比背景亮一階，深度靠細線而不是陰影
+    static let groupedBackground = adaptive(light: nil, dark: 0x141415, system: .page)
+    static let cardBackground = adaptive(light: nil, dark: 0x1B1B1D, system: .card)
+
+    /// 側邊欄比頁面再深一點
+    static let sidebarBackground = adaptive(light: nil, dark: 0x0F0F10, system: .sidebar)
+
+    private enum SystemRole { case page, card, sidebar }
+
+    private static func adaptive(light: UInt32?, dark: UInt32, system: SystemRole) -> Color {
+        #if os(iOS)
+        return Color(uiColor: UIColor { t in
+            if t.userInterfaceStyle == .dark { return UIColor(hex: dark) }
+            return system == .page ? .systemGroupedBackground : .secondarySystemGroupedBackground
+        })
+        #else
+        return Color(nsColor: NSColor(name: nil) { a in
+            if a.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua { return NSColor(hex: dark) }
+            switch system {
+            case .page: return .windowBackgroundColor
+            case .card: return .controlBackgroundColor
+            case .sidebar: return NSColor.windowBackgroundColor.blended(withFraction: 0.04, of: .black) ?? .windowBackgroundColor
+            }
+        })
+        #endif
+    }
+}
+
+#if os(iOS)
+private extension UIColor {
+    convenience init(hex: UInt32) {
+        self.init(red: CGFloat(hex >> 16 & 0xFF) / 255, green: CGFloat(hex >> 8 & 0xFF) / 255,
+                  blue: CGFloat(hex & 0xFF) / 255, alpha: 1)
+    }
+}
+#else
+private extension NSColor {
+    convenience init(hex: UInt32) {
+        self.init(srgbRed: CGFloat(hex >> 16 & 0xFF) / 255, green: CGFloat(hex >> 8 & 0xFF) / 255,
+                  blue: CGFloat(hex & 0xFF) / 255, alpha: 1)
+    }
+}
+#endif
 
 // MARK: - 金額（支援隱藏）
 
@@ -92,7 +151,7 @@ extension PortfolioStore {
     }
 }
 
-/// 膠囊樣式的漲跌標籤：▲ NT$374,281 (+3.5%)
+/// 漲跌：↗ NT$374,281 (+3.5%)，純文字，不加底色
 struct DeltaBadge: View {
     @Environment(\.portfolio) private var store
     let delta: Double
@@ -105,7 +164,7 @@ struct DeltaBadge: View {
         let color = store.deltaColor(delta)
         HStack(spacing: 4) {
             Image(systemName: delta > 0 ? "arrow.up.right" : delta < 0 ? "arrow.down.right" : "equal")
-                .font(.caption.weight(.bold))
+                .font(.caption.weight(.semibold))
             if !store.hideAmounts {
                 Text(Fmt.money(abs(delta), currency))
             }
@@ -113,12 +172,9 @@ struct DeltaBadge: View {
                 Text(store.hideAmounts ? Fmt.percent(pct) : "(\(Fmt.percent(pct)))")
             }
         }
-        .font(.subheadline.weight(.semibold))
+        .font(.subheadline)
         .monospacedDigit()
         .foregroundStyle(color)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(color.opacity(0.12), in: Capsule())
     }
 }
 
@@ -143,7 +199,13 @@ struct DeltaText: View {
             }
         }
         .monospacedDigit()
-        .foregroundStyle(store.deltaColor(delta))
+        .foregroundStyle(store.deltaColor(isFlat ? 0 : delta))
+    }
+
+    /// 只顯示百分比、而且四捨五入後是 0.0% 時，用灰色
+    private var isFlat: Bool {
+        guard showPercentOnly || store.hideAmounts, let base, base != 0 else { return false }
+        return abs(delta / base) < 0.0005
     }
 }
 
@@ -152,8 +214,6 @@ struct DeltaText: View {
 struct Card<Content: View>: View {
     var title: String?
     var systemImage: String?
-    /// 左上角淡淡的色暈（例如跟著漲跌顏色）
-    var tint: Color?
     @ViewBuilder var content: Content
 
     var body: some View {
@@ -161,23 +221,17 @@ struct Card<Content: View>: View {
             if let title {
                 Label(title, systemImage: systemImage ?? "")
                     .labelStyle(TitleOnlyIfNoIcon(hasIcon: systemImage != nil))
-                    .font(.headline)
+                    .font(.headline.weight(.medium))
             }
             content
         }
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background {
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(Color.cardBackground)
-                .overlay {
-                    if let tint {
-                        RoundedRectangle(cornerRadius: 20, style: .continuous)
-                            .fill(LinearGradient(colors: [tint.opacity(0.10), tint.opacity(0)],
-                                                 startPoint: .topLeading, endPoint: .center))
-                    }
-                }
-                .shadow(color: .black.opacity(0.05), radius: 10, y: 3)
+        .background(Color.cardBackground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            // 深度用細線，不用陰影
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
         }
     }
 }

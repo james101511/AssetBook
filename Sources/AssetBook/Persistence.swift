@@ -12,11 +12,13 @@ struct StoredData: Codable {
         var redMeansUp: Bool
         var hideAmounts: Bool
         var autoFetchQuotes: Bool
+        var appearance: Appearance
 
-        init(redMeansUp: Bool, hideAmounts: Bool, autoFetchQuotes: Bool) {
+        init(redMeansUp: Bool, hideAmounts: Bool, autoFetchQuotes: Bool, appearance: Appearance) {
             self.redMeansUp = redMeansUp
             self.hideAmounts = hideAmounts
             self.autoFetchQuotes = autoFetchQuotes
+            self.appearance = appearance
         }
 
         // 舊版檔案沒有的欄位用預設值，避免讀檔失敗
@@ -25,6 +27,7 @@ struct StoredData: Codable {
             redMeansUp = try c.decodeIfPresent(Bool.self, forKey: .redMeansUp) ?? true
             hideAmounts = try c.decodeIfPresent(Bool.self, forKey: .hideAmounts) ?? false
             autoFetchQuotes = try c.decodeIfPresent(Bool.self, forKey: .autoFetchQuotes) ?? true
+            appearance = try c.decodeIfPresent(Appearance.self, forKey: .appearance) ?? .system
         }
     }
 }

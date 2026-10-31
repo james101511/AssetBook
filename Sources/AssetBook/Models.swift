@@ -151,6 +151,29 @@ enum Valuation: Codable, Hashable {
     case portfolio
 }
 
+/// 現金與存款的子分類
+enum CashGroup: String, Codable, CaseIterable, Identifiable, Hashable {
+    case bank, exchange, wallet
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .bank: "銀行存款"
+        case .exchange: "交易所與穩定幣"
+        case .wallet: "現鈔與儲值"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .bank: "building.columns"
+        case .exchange: "arrow.left.arrow.right"
+        case .wallet: "wallet.bifold"
+        }
+    }
+}
+
 struct Account: Identifiable, Codable, Hashable {
     let id: UUID
     var name: String
@@ -162,10 +185,12 @@ struct Account: Identifiable, Codable, Hashable {
     var isArchived: Bool
     /// nil 表示依名稱自動配對（見 IconCatalog）
     var icon: AccountIcon?
+    /// 現金帳戶的子分類；nil 表示依名稱與備註自動判斷
+    var cashGroup: CashGroup?
 
     init(id: UUID = UUID(), name: String, note: String = "", category: AssetCategory,
          currency: Currency, valuation: Valuation = .balance, isArchived: Bool = false,
-         icon: AccountIcon? = nil) {
+         icon: AccountIcon? = nil, cashGroup: CashGroup? = nil) {
         self.id = id
         self.name = name
         self.note = note
@@ -174,10 +199,11 @@ struct Account: Identifiable, Codable, Hashable {
         self.valuation = valuation
         self.isArchived = isArchived
         self.icon = icon
+        self.cashGroup = cashGroup
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, note, category, currency, valuation, isArchived, icon
+        case id, name, note, category, currency, valuation, isArchived, icon, cashGroup
     }
 
     // 舊版資料檔沒有 isArchived，預設為 false
@@ -191,6 +217,18 @@ struct Account: Identifiable, Codable, Hashable {
         valuation = try c.decode(Valuation.self, forKey: .valuation)
         isArchived = try c.decodeIfPresent(Bool.self, forKey: .isArchived) ?? false
         icon = try c.decodeIfPresent(AccountIcon.self, forKey: .icon)
+        cashGroup = try c.decodeIfPresent(CashGroup.self, forKey: .cashGroup)
+    }
+
+    /// 子分類：自己選的優先，否則看名稱與備註猜（穩定幣、交易所 → 交易所；現金、儲值卡 → 現鈔與儲值）
+    var resolvedCashGroup: CashGroup {
+        if let cashGroup { return cashGroup }
+        let text = (name + " " + note).lowercased()
+        let exchange = ["穩定幣", "交易所", "usdc", "usdt", "kraken", "binance", "coinbase", "okx", "bitopro", "max"]
+        let wallet = ["現金", "現鈔", "suica", "pasmo", "icoca", "悠遊卡", "一卡通", "paypay", "儲值", "錢包"]
+        if exchange.contains(where: text.contains) { return .exchange }
+        if wallet.contains(where: text.contains) { return .wallet }
+        return .bank
     }
 
     /// 頭像上的字：持有幣種用代號（BTC），短的英文縮寫整個顯示（USDC），其他取第一個字（樂、K）

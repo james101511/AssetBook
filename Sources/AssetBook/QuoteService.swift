@@ -12,7 +12,7 @@ struct LiveQuotes {
 }
 
 /// 免費、不需要 API key 的報價來源：
-/// - 今天：匯率用 ExchangeRate-API（每日更新），幣價用 CoinGecko（即時）
+/// - 今天：匯率用 Yahoo（盤中即時），幣價也用 Yahoo；Yahoo 失敗時匯率退回 ExchangeRate-API（每日），幣價退回 CoinGecko（免費額度易 429）
 /// - 過去日期（補登）：fawazahmed0/currency-api 的每日歷史資料
 /// 主要來源失敗時，會改用 currency-api 補上缺的報價。
 enum QuoteService {
@@ -24,9 +24,13 @@ enum QuoteService {
         }
 
         var result = LiveQuotes()
-        async let fx = attempt { try await exchangeRateAPI() }
+        async let fx = attempt { try await yahooFX() }
+        async let fxDaily = attempt { try await exchangeRateAPI() }
+        async let cryptoY = attempt { try await yahooCrypto() }
         async let crypto = attempt { try await coinGecko() }
-        apply(await fx, to: &result, source: "ExchangeRate-API")
+        apply(await fx, to: &result, source: "Yahoo")
+        apply(await fxDaily, to: &result, source: "ExchangeRate-API")
+        apply(await cryptoY, to: &result, source: "Yahoo")
         apply(await crypto, to: &result, source: "CoinGecko")
 
         if !result.missing.isEmpty {
@@ -37,6 +41,16 @@ enum QuoteService {
 
     // MARK: 來源
 
+    /// Yahoo 的匯率是盤中即時報價；日圓用 USDTWD ÷ USDJPY，精度比直接取 JPYTWD 高
+    private static func yahooFX() async throws -> [Quote: Double] {
+        async let twd = StockService.yahooQuote("USDTWD=X")
+        async let jpy = StockService.yahooQuote("USDJPY=X")
+        guard let t = await twd?.price else { throw QuoteError.badResponse("Yahoo 匯率") }
+        var out: [Quote: Double] = [.usdTWD: t]
+        if let j = await jpy?.price, j > 0 { out[.jpyTWD] = t / j }
+        return out
+    }
+
     private static func exchangeRateAPI() async throws -> [Quote: Double] {
         struct Response: Decodable { let result: String; let rates: [String: Double] }
         let r: Response = try await get("https://open.er-api.com/v6/latest/USD")
@@ -44,6 +58,17 @@ enum QuoteService {
             throw QuoteError.badResponse("ExchangeRate-API")
         }
         return [.usdTWD: twd, .jpyTWD: twd / jpy]
+    }
+
+    /// CoinGecko 免費額度很容易 429，所以幣價優先用 Yahoo
+    private static func yahooCrypto() async throws -> [Quote: Double] {
+        async let btc = StockService.yahooQuote("BTC-USD")
+        async let cro = StockService.yahooQuote("CRO-USD")
+        var out: [Quote: Double] = [:]
+        out[.btcUSD] = await btc?.price
+        out[.croUSD] = await cro?.price
+        guard !out.isEmpty else { throw QuoteError.badResponse("Yahoo 幣價") }
+        return out
     }
 
     private static func coinGecko() async throws -> [Quote: Double] {

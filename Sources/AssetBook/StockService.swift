@@ -124,7 +124,7 @@ enum StockService {
 
     // MARK: - Yahoo
 
-    private static func yahooQuote(_ symbol: String) async -> StockQuote? {
+    static func yahooQuote(_ symbol: String) async -> StockQuote? {
         struct Response: Decodable {
             struct Chart: Decodable { let result: [Result]? }
             struct Result: Decodable { let meta: Meta }

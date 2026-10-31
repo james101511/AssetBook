@@ -27,6 +27,8 @@ final class PortfolioStore {
     var redMeansUp = true { didSet { persist() } }
     /// 開啟「更新資產」時自動帶入最新匯率與幣價
     var autoFetchQuotes = true { didSet { persist() } }
+    /// 外觀：跟隨系統、淺色或深色
+    var appearance: Appearance = .system { didSet { persist(); appearance.apply() } }
 
     // 介面狀態
     var isUpdating = false
@@ -59,6 +61,7 @@ final class PortfolioStore {
                 store.redMeansUp = data.settings.redMeansUp
                 store.hideAmounts = data.settings.hideAmounts
                 store.autoFetchQuotes = data.settings.autoFetchQuotes
+                store.appearance = data.settings.appearance
             } else {
                 store = .sample
             }
@@ -89,7 +92,7 @@ final class PortfolioStore {
     private var storedData: StoredData {
         StoredData(accounts: accounts, snapshots: snapshots,
                    settings: .init(redMeansUp: redMeansUp, hideAmounts: hideAmounts,
-                                  autoFetchQuotes: autoFetchQuotes))
+                                  autoFetchQuotes: autoFetchQuotes, appearance: appearance))
     }
 
     private func persist() {
@@ -115,6 +118,7 @@ final class PortfolioStore {
         redMeansUp = imported.settings.redMeansUp
         hideAmounts = imported.settings.hideAmounts
         autoFetchQuotes = imported.settings.autoFetchQuotes
+        appearance = imported.settings.appearance
         persistence = saved
         persist()
     }

@@ -361,7 +361,7 @@ struct UpdateSheet: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 MoneyText(value: newNet)
-                    .font(.title2.weight(.bold))
+                    .font(.title2.weight(.semibold))
             }
             Spacer()
             VStack(alignment: .trailing, spacing: 4) {

@@ -17,6 +17,11 @@ struct AssetBookApp: App {
         WindowGroup {
             RootView()
                 .environment(\.portfolio, store)
+                #if os(iOS)
+                .preferredColorScheme(store.appearance.scheme)
+                #else
+                .onAppear { store.appearance.apply() }
+                #endif
         }
         #if os(macOS)
         .defaultSize(width: 1120, height: 780)
@@ -147,19 +152,28 @@ struct RootView: View {
     /// 各分頁的列表結構不同時，切換幾次就會卡住。
     private var navigation: some View {
         NavigationSplitView {
-            List(selection: Binding(get: { tab }, set: { if let t = $0 { tab = t } })) {
-                Label("總覽", systemImage: "chart.pie.fill").tag(AppTab.overview)
-                Label("歷史紀錄", systemImage: "clock.arrow.circlepath").tag(AppTab.history)
-                Section("帳戶") {
+            VStack(alignment: .leading, spacing: 0) {
+                VStack(spacing: 2) {
+                    SidebarRow(title: "總覽", symbol: "chart.pie", selected: tab == .overview) { tab = .overview }
+                    SidebarRow(title: "歷史紀錄", symbol: "clock.arrow.circlepath", selected: tab == .history) { tab = .history }
+                }
+                Text("帳戶")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .padding(.horizontal, 10)
+                    .padding(.top, 24).padding(.bottom, 8)
+                VStack(spacing: 2) {
                     ForEach(AccountsFilter.allCases) { f in
-                        Label(f.title, systemImage: f.symbol).tag(AppTab.accounts(f))
+                        SidebarRow(title: f.title, symbol: f.symbol, selected: tab == .accounts(f)) { tab = .accounts(f) }
                     }
                 }
-                Section {
-                    Label("設定", systemImage: "gearshape").tag(AppTab.settings)
-                }
+                Spacer(minLength: 16)
+                SidebarRow(title: "設定", symbol: "gearshape", selected: tab == .settings) { tab = .settings }
             }
-            .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 260)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 12)
+            .frame(maxHeight: .infinity, alignment: .top)
+            .background(Color.sidebarBackground)
+            .navigationSplitViewColumnWidth(min: 190, ideal: 210, max: 260)
         } detail: {
             NavigationStack { detail(for: tab) }
                 .id(tab)
@@ -233,6 +247,45 @@ struct RootView: View {
     }
 }
 
+/// 側邊欄的一列：選取時是淡淡的亮面加細線，滑過時只亮一點
+private struct SidebarRow: View {
+    let title: String
+    let symbol: String
+    let selected: Bool
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: symbol)
+                    .font(.system(size: 14))
+                    .frame(width: 20)
+                    .foregroundStyle(selected ? .primary : .secondary)
+                Text(title)
+                    .font(.system(size: 14, weight: selected ? .medium : .regular))
+                    .foregroundStyle(selected ? .primary : .secondary)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 34)
+            .background {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.primary.opacity(selected ? 0.08 : hovering ? 0.04 : 0))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(Color.primary.opacity(selected ? 0.10 : 0), lineWidth: 1)
+                    }
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: selected)
+        .animation(.easeOut(duration: 0.12), value: hovering)
+    }
+}
+
 struct SettingsView: View {
     @Environment(\.portfolio) private var store
 
@@ -250,6 +303,17 @@ struct SettingsView: View {
                 } label: {
                     SettingsRow("漲跌顏色", "paintpalette.fill", .pink,
                                 detail: store.redMeansUp ? "台灣習慣：上漲為紅色" : "歐美習慣：上漲為綠色")
+                }
+                LabeledContent {
+                    Picker("外觀", selection: $store.appearance) {
+                        ForEach(Appearance.allCases) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
+                } label: {
+                    SettingsRow("外觀", "circle.lefthalf.filled", .indigo,
+                                detail: store.appearance == .system ? "跟隨系統的淺色／深色設定" : "固定使用\(store.appearance.title)")
                 }
                 Toggle(isOn: $store.hideAmounts) {
                     SettingsRow("隱藏金額", "eye.slash.fill", .gray, detail: "在公共場合或分享螢幕時使用（⇧⌘H）")

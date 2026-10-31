@@ -2,8 +2,23 @@
 # 編譯並安裝 AssetBook.app 到「應用程式」資料夾（不需要 Xcode）。
 # 用法：./build-app.sh            編譯並安裝
 #       ./build-app.sh --no-install 只編譯到 build/AssetBook.app
+#       ./build-app.sh --zip        編譯並壓縮成 build/AssetBook.zip，方便傳給別人
 set -euo pipefail
 cd "${0:A:h}"
+
+# 先檢查環境，缺什麼就直接告訴使用者怎麼補
+if [[ "$(uname)" != "Darwin" ]]; then
+    echo "✗ 這個 App 只能在 Mac 上編譯。" >&2; exit 1
+fi
+MACOS_MAJOR="${$(sw_vers -productVersion)%%.*}"
+if (( MACOS_MAJOR < 15 )); then
+    echo "✗ 需要 macOS 15（Sequoia）或更新的版本，目前是 $(sw_vers -productVersion)。" >&2; exit 1
+fi
+if ! xcode-select -p >/dev/null 2>&1 || ! command -v swiftc >/dev/null 2>&1; then
+    echo "✗ 找不到 Swift 編譯器。請先在終端機執行下面這行，裝完再重跑一次（不需要安裝完整 Xcode）：" >&2
+    echo "    xcode-select --install" >&2
+    exit 1
+fi
 
 APP_NAME="AssetBook"
 DISPLAY_NAME="資產簿"
@@ -57,6 +72,13 @@ PLIST
 
 echo "▸ 本機簽章…"
 codesign --force --deep --sign - "$APP"
+
+if [[ "${1:-}" == "--zip" ]]; then
+    rm -f "build/$APP_NAME.zip"
+    ditto -c -k --keepParent "$APP" "build/$APP_NAME.zip"
+    echo "✓ 完成：build/$APP_NAME.zip"
+    exit 0
+fi
 
 if [[ "${1:-}" == "--no-install" ]]; then
     echo "✓ 完成：$APP"
