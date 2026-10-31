@@ -327,10 +327,21 @@ struct SettingsView: View {
                     SettingsRow("自動帶入最新報價", "antenna.radiowaves.left.and.right", .green,
                                 detail: "開啟「更新資產」時自動填入匯率、幣價與股價")
                 }
+                Toggle(isOn: $store.autoRecord) {
+                    SettingsRow("自動記錄每日估值", "calendar.badge.clock", .orange,
+                                detail: "當天沒手動記錄時，開啟 App 會存一個估值點")
+                }
+                if !store.autoSnapshots.isEmpty {
+                    LabeledContent {
+                        Button("清除", role: .destructive) { store.clearAutoSnapshots() }
+                    } label: {
+                        SettingsRow("自動記錄", "trash", .gray, detail: "目前有 \(store.autoSnapshots.count) 天，只用於走勢圖與日曆")
+                    }
+                }
             } header: {
                 Text("報價")
             } footer: {
-                Text("匯率：ExchangeRate-API　幣價：CoinGecko　股價：Yahoo Finance（無法連線時改用證交所、CNBC）。只會下載報價，不會送出任何個人資料。")
+                Text("自動估值點 = 最近一次手動記錄的餘額與持股 × 當時的匯率、幣價、股價。它只會出現在走勢圖與日曆上，不影響歷史紀錄、比較基準與匯出；你手動記錄那天會自動取代它。\n匯率、幣價與股價：Yahoo Finance，無法連線時改用 ExchangeRate-API、CoinGecko、證交所、CNBC。只會下載報價，不會送出任何個人資料。")
             }
 
             Section {

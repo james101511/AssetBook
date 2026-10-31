@@ -129,19 +129,25 @@ struct HistoryView: View {
     }
 
     private var dayGrid: some View {
-        let byDay = Dictionary(store.snapshots.map { (cal.startOfDay(for: $0.date), $0) },
-                               uniquingKeysWith: { a, _ in a })
+        // 同一天有手動記錄就用手動的，否則用自動估值點
+        let byDay = Dictionary((store.autoSnapshots + store.snapshots).map { (cal.startOfDay(for: $0.date), $0) },
+                               uniquingKeysWith: { _, manual in manual })
         let cols = Array(repeating: GridItem(.flexible(), spacing: 6), count: 7)
         return LazyVGrid(columns: cols, spacing: 6) {
             ForEach(Array(dayCells.enumerated()), id: \.offset) { _, day in
                 if let day {
                     if let snap = byDay[cal.startOfDay(for: day)] {
+                        let auto = store.isAuto(snap)
                         NavigationLink(value: snap) {
-                            DayCell(day: day, snapshot: snap, previous: store.snapshot(before: snap))
+                            DayCell(day: day, snapshot: snap, previous: store.snapshot(before: snap), isAuto: auto)
                         }
                         .buttonStyle(.plain)
                         .contextMenu {
-                            Button("刪除紀錄", systemImage: "trash", role: .destructive) { pendingDelete = snap }
+                            if auto {
+                                Button("刪除自動記錄", systemImage: "trash", role: .destructive) { store.deleteAuto(snap) }
+                            } else {
+                                Button("刪除紀錄", systemImage: "trash", role: .destructive) { pendingDelete = snap }
+                            }
                         }
                     } else {
                         DayCell(day: day, snapshot: nil, previous: nil)
@@ -159,8 +165,9 @@ struct HistoryView: View {
         if let last = inMonth.last {
             let baseline = store.snapshots.last { $0.date < (inMonth.first?.date ?? last.date) } ?? inMonth.first!
             let delta = store.netWorth(last) - store.netWorth(baseline)
+            let autoCount = store.autoSnapshots.filter { cal.isDate($0.date, equalTo: month, toGranularity: .month) }.count
             HStack(spacing: 8) {
-                Text("本月 \(inMonth.count) 筆紀錄")
+                Text("本月 \(inMonth.count) 筆紀錄" + (autoCount > 0 ? "、\(autoCount) 天自動估值" : ""))
                 if baseline.id != last.id {
                     Text("·")
                     DeltaText(delta: delta)
@@ -218,6 +225,8 @@ private struct DayCell: View {
     let day: Date
     let snapshot: Snapshot?
     let previous: Snapshot?
+    /// 自動估值點：顏色淡一點，右上角標「自動」
+    var isAuto = false
 
     var body: some View {
         let isToday = Calendar.current.isDateInToday(day)
@@ -233,6 +242,7 @@ private struct DayCell: View {
                 Spacer(minLength: 0)
                 Text(store.hideAmounts ? "••" : Fmt.wan(net))
                     .font(.system(size: 12).monospacedDigit())
+                    .foregroundStyle(isAuto ? Color.secondary : Color.primary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
                 if let previous {
@@ -248,7 +258,12 @@ private struct DayCell: View {
         }
         .padding(8)
         .frame(maxWidth: .infinity, minHeight: 76, alignment: .topLeading)
-        .background(snapshot == nil ? Color.clear : Color.primary.opacity(0.05),
+        .overlay(alignment: .topTrailing) {
+            if isAuto {
+                Text("自動").font(.system(size: 9)).foregroundStyle(.tertiary).padding(6)
+            }
+        }
+        .background(snapshot == nil ? Color.clear : Color.primary.opacity(isAuto ? 0.025 : 0.05),
                     in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }

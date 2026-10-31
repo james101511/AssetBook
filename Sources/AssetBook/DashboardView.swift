@@ -96,6 +96,8 @@ private struct NetWorthCard: View {
         let date: Date
         let value: Double
         var isLive = false
+        /// 自動記錄的估值點（不是手動記錄）
+        var isAuto = false
     }
 
     var body: some View {
@@ -189,7 +191,8 @@ private struct NetWorthCard: View {
 
     /// 紀錄的時間跨度（天）
     private var historyDays: Int {
-        guard let first = store.snapshots.first?.date, let last = store.snapshots.last?.date else { return 0 }
+        let all = store.chartSnapshots
+        guard let first = all.first?.date, let last = all.last?.date else { return 0 }
         return Calendar.current.dateComponents([.day], from: first, to: last).day ?? 0
     }
 
@@ -246,14 +249,14 @@ private struct NetWorthCard: View {
 
     /// 範圍內的紀錄；起點前一筆也帶進來，線才不會從中間開始
     private var points: [Point] {
-        let all = store.snapshots
+        let all = store.chartSnapshots
         var inRange = all
         if let days = range.days, let end = all.last?.date,
            let cutoff = Calendar.current.date(byAdding: .day, value: -days, to: end) {
             inRange = all.filter { $0.date >= cutoff }
             if let before = all.last(where: { $0.date < cutoff }) { inRange.insert(before, at: 0) }
         }
-        var p = inRange.map { Point(date: $0.date, value: store.netWorth($0)) }
+        var p = inRange.map { Point(date: $0.date, value: store.netWorth($0), isAuto: store.isAuto($0)) }
         if mode == .live, let live = store.liveSnapshot {
             p.append(Point(date: live.date, value: store.netWorth(live), isLive: true))
         }
@@ -279,11 +282,15 @@ private struct NetWorthCard: View {
                 AreaMark(x: .value("日期", p.date), yStart: .value("下限", floor), yEnd: .value("淨值", p.value))
                     .foregroundStyle(LinearGradient(colors: [color.opacity(0.14), color.opacity(0.0)],
                                                     startPoint: .top, endPoint: .bottom))
-                    .interpolationMethod(.catmullRom)
+                    .interpolationMethod(.monotone)
                 LineMark(x: .value("日期", p.date), y: .value("淨值", p.value), series: .value("系列", "紀錄"))
                     .foregroundStyle(color)
                     .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
-                    .interpolationMethod(.catmullRom)
+                    .interpolationMethod(.monotone)
+                // 每個記錄日一個點：手動記錄是實心，自動估值點是小的淡點
+                PointMark(x: .value("日期", p.date), y: .value("淨值", p.value))
+                    .symbolSize(p.isAuto ? 14 : 32)
+                    .foregroundStyle(p.isAuto ? color.opacity(0.45) : color)
             }
             if let livePoint = pts.last, livePoint.isLive, let lastRecord = recorded.last {
                 ForEach([lastRecord, livePoint]) { p in

@@ -1,5 +1,145 @@
 # AssetBook 資產簿
 
+**English** · [繁體中文](#assetbook-資產簿-繁體中文)
+
+A native Mac app that replaces the "add a new column to a spreadsheet every week" routine. Log your bank accounts, stocks, crypto and credit cards, let the app fill in exchange rates and prices, and watch your net worth over time. Everything is stored on your own computer: no account, no upload.
+
+> There is also SwiftUI code for iPhone / iPad. It needs Xcode to build; see the bottom of this page.
+
+## Install (Mac, about 3 minutes)
+
+Requires **macOS 15 (Sequoia) or later**. You don't need Xcode, only Apple's command line tools.
+
+**1. Install the command line tools** (if already installed it says so; skip to the next step)
+
+```bash
+xcode-select --install
+```
+
+**2. Download and install**
+
+```bash
+git clone https://github.com/james101511/AssetBook.git
+cd AssetBook
+./build-app.sh
+```
+
+After about a minute the app is installed in Applications and opens automatically. Later you can launch it from Launchpad or Spotlight (search "資產簿"). The first launch has a set of fictional sample data you can edit or delete.
+
+> This repository is currently private. Ask the author to add you as a collaborator and sign in with `gh auth login` before cloning.
+
+**Update to a new version**
+
+```bash
+cd AssetBook
+git pull
+./build-app.sh
+```
+
+Your data is not affected.
+
+### If someone sent you a .zip
+
+Unzip it and drag `AssetBook.app` into Applications. **The first time, right-click › Open** (don't double-click), then click Open again. The app isn't signed with a paid Apple developer certificate, so macOS blocks a normal launch.
+
+If it still won't open, run this in Terminal:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/AssetBook.app
+```
+
+To package a copy for a friend: `./build-app.sh --zip` writes `build/AssetBook.zip`.
+
+## First use
+
+1. Under **Accounts** in the sidebar, create your accounts with the ＋ button at top right and pick a category (cash & deposits, stocks, crypto, liabilities).
+   - Banks and exchanges: enter the balance.
+   - Crypto: enter the quantity held; the app multiplies by the coin price.
+   - Stocks: choose "holdings", enter ticker and shares; market value follows live prices.
+   - Credit cards: put them under liabilities and enter the amount due each time.
+2. Press **Update** (⌘U) to record your first set of numbers. Exchange rates, coin prices and stock prices are filled in automatically; other fields are prefilled with last time's numbers, so change only what moved.
+3. Repeat step 2 each week and the overview, history and category pages grow their trend lines.
+
+Accounts in the sample data can be edited, archived or deleted.
+
+## Features
+
+- **Overview**: net worth (shown "live" by default: latest record × current exchange rates, coin prices and stock prices), a scrubbable trend chart (7 days / 1 month / 3 months / 1 year / all), an animated allocation donut (by category or currency), exchange rates, coin prices and current stock prices.
+- **History**: a calendar view showing net worth and change on each recorded day; click a day for the full breakdown. You can also switch to a list.
+- **Auto-record**: if you open the app on a day without a manual record, it saves a valuation point for that day (latest manual record × live prices). It appears as a faint dot on the chart and a faint "自動" (auto) cell on the calendar. A manual record on the same day replaces it, and it never affects comparisons or exports. Turn it off or clear it under Settings › Quotes.
+- **Accounts**: browse by category. Cash & deposits is split into bank deposits, exchanges & stablecoins, and cash & stored value; stocks expand into Taiwan and US holdings; every account has its own history chart.
+- **Update** (⌘U): replaces "add a column" in the spreadsheet, and you can add accounts while updating.
+- **Export to spreadsheet**: export all records as CSV or copy to the clipboard and paste into Google Sheets. Dates run across columns, items go down, with subtotals and totals.
+- **Settings**: appearance (auto / light / dark), red-up/green-down or green-up/red-down, hide amounts (⇧⌘H, handy in public), backup and import.
+
+## Data and privacy
+
+- Data: `~/Library/Application Support/AssetBook/data.json`, saved automatically on every change.
+- Backups: the `backups/` folder next to it keeps the previous version before each save, up to 30.
+- Moving: File › Export backup / Import backup (⇧⌘E) lets you back up by hand or move to another computer.
+- A damaged file is renamed to `data.broken-….json` and kept, never overwritten.
+- The app only fetches public quotes from the internet and sends no personal data.
+- Uninstall: drag `/Applications/AssetBook.app` to the Trash. Your data lives in the folder above; delete that too if you want it gone.
+
+## Quote sources
+
+| Item | Primary source | Fallback |
+| --- | --- | --- |
+| Exchange rates (USD, JPY) | Yahoo Finance (intraday) | ExchangeRate-API (daily) |
+| Crypto (BTC, CRO) | Yahoo Finance | CoinGecko (free tier is easily rate limited) |
+| Stocks (Taiwan, US, ETFs) | Yahoo Finance | TWSE (Taiwan), CNBC (US) |
+
+When Yahoo rate limits, the app switches to the fallback for 10 minutes. Stock search works with tickers and Chinese names. Each record stores the holdings and stock prices at that time, so historical numbers don't change when prices move later.
+
+## FAQ
+
+**"Can't be opened because the developer cannot be verified"**: see "If someone sent you a .zip" above; right-click › Open.
+
+**`./build-app.sh` says it can't find the Swift compiler**: run `xcode-select --install` and retry.
+
+**`redefinition of module 'SwiftBridging'` while building**: the script handles this automatically; if it still appears, update the command line tools.
+
+**Exchange rates or stock prices don't show**: check your connection. Sources are occasionally rate limited; wait a few minutes and press Refresh at the top right of the overview.
+
+## For developers
+
+```
+Sources/AssetBook/
+  AssetBookApp.swift    entry point, Mac sidebar / iPhone tabs, settings
+  PortfolioStore.swift  data and calculations (@Observable)
+  Models.swift          accounts, records, quotes
+  Persistence.swift     JSON storage, backups
+  QuoteService.swift    exchange rates, crypto
+  StockService.swift    stock prices (Yahoo, TWSE, CNBC)
+  DashboardView.swift   overview
+  HistoryView.swift     history (calendar)
+  AccountsView.swift    accounts pages and editor
+  UpdateSheet.swift     update
+  SheetExport.swift     spreadsheet export
+```
+
+- The icon is generated by `scripts/make-icon.swift` into `Resources/AppIcon.icns`.
+- Set the `ASSETBOOK_DATA_DIR` environment variable to use another data folder when testing, so your real data stays untouched.
+- `swift run` gives a quick preview on a Mac.
+
+### Build in Xcode (iOS + macOS)
+
+1. Install Xcode 16 or later.
+2. File › New › Project › **Multiplatform › App**, named `AssetBook`.
+3. Delete the generated `ContentView.swift` and `AssetBookApp.swift`.
+4. Drag all `.swift` files in `Sources/AssetBook/` into the project (check Copy items).
+5. Set the deployment target to iOS 18 / macOS 15, then run on an iPhone simulator or My Mac.
+
+## Ideas for later
+
+- iCloud sync for iPhone (SwiftData).
+- Import the CSV from your old spreadsheet.
+- A desktop widget showing net worth.
+
+---
+
+## AssetBook 資產簿 (繁體中文)
+
 把「每週在試算表新增一欄、手動 key 數字」的流程，換成一個原生的 Mac App：記下每週的銀行、股票、加密貨幣與信用卡，自動帶入匯率和股價，看淨資產怎麼變化。資料全部存在你自己的電腦上，沒有帳號、不上傳。
 
 > 另外也有 iPhone / iPad 版本的程式碼（SwiftUI），需要用 Xcode 建置，見最下面。
@@ -64,6 +204,7 @@ xattr -dr com.apple.quarantine /Applications/AssetBook.app
 
 - **總覽**：淨資產（預設顯示「即時」：最新紀錄 × 現在的匯率、幣價、股價）、可拖曳的走勢圖（7 天 / 1 個月 / 3 個月 / 1 年 / 全部）、資產組成動畫圓餅圖（分類或幣別）、匯率、幣價與持股現價。
 - **歷史紀錄**：日曆檢視，有紀錄的日子顯示當天淨資產與變動，點進去看完整明細；也可切成列表。
+- **自動記錄**：當天打開 App 但還沒手動記錄時，會自動存一個當日估值點（最新手動紀錄 × 即時報價），在走勢圖和日曆上以淡色小點標示「自動」；手動記錄會取代它，不影響比較基準與匯出。可在設定 › 報價關閉或清除。
 - **帳戶**：依分類查看。現金與存款分成「銀行存款」「交易所與穩定幣」「現鈔與儲值」三組；股票依台股、美股展開持股；每個帳戶有自己的歷史圖表。
 - **更新資產**（⌘U）：取代試算表的「新增一欄」，可以在更新時直接新增帳戶。
 - **匯出成試算表**：把所有紀錄匯出成 CSV 或複製到剪貼簿，貼到 Google 試算表，格式是日期為欄、項目往下排，並附小計與總計。

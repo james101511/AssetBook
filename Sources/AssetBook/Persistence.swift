@@ -6,6 +6,8 @@ struct StoredData: Codable {
     var version = 1
     var accounts: [Account]
     var snapshots: [Snapshot]
+    /// 自動記錄的每日估值點（只用於走勢圖與日曆）；舊版檔案沒有這個欄位
+    var autoSnapshots: [Snapshot]?
     var settings: Settings
 
     struct Settings: Codable {
@@ -13,8 +15,10 @@ struct StoredData: Codable {
         var hideAmounts: Bool
         var autoFetchQuotes: Bool
         var appearance: Appearance
+        var autoRecord: Bool
 
-        init(redMeansUp: Bool, hideAmounts: Bool, autoFetchQuotes: Bool, appearance: Appearance) {
+        init(redMeansUp: Bool, hideAmounts: Bool, autoFetchQuotes: Bool, appearance: Appearance, autoRecord: Bool) {
+            self.autoRecord = autoRecord
             self.redMeansUp = redMeansUp
             self.hideAmounts = hideAmounts
             self.autoFetchQuotes = autoFetchQuotes
@@ -28,6 +32,7 @@ struct StoredData: Codable {
             hideAmounts = try c.decodeIfPresent(Bool.self, forKey: .hideAmounts) ?? false
             autoFetchQuotes = try c.decodeIfPresent(Bool.self, forKey: .autoFetchQuotes) ?? true
             appearance = try c.decodeIfPresent(Appearance.self, forKey: .appearance) ?? .system
+            autoRecord = try c.decodeIfPresent(Bool.self, forKey: .autoRecord) ?? true
         }
     }
 }
@@ -69,9 +74,10 @@ struct Persistence {
         return try Self.decoder.decode(StoredData.self, from: Data(contentsOf: fileURL))
     }
 
-    func save(_ data: StoredData) throws {
+    /// makeBackup 為 false 時不複製舊檔（自動記錄每幾分鐘就可能寫一次，不能把備份洗掉）
+    func save(_ data: StoredData, makeBackup: Bool = true) throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try backup()
+        if makeBackup { try backup() }
         try Self.encoder.encode(data).write(to: fileURL, options: .atomic)
     }
 

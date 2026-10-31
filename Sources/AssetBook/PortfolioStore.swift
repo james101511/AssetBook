@@ -20,8 +20,13 @@ final class PortfolioStore {
     private(set) var accounts: [Account]
     /// 依日期由舊到新排序
     private(set) var snapshots: [Snapshot]
+    /// 沒有手動記錄的日子，開啟 App 時自動存下的估值點。只用於走勢圖與日曆，
+    /// 不參與比較、匯出與更新畫面的預設值
+    private(set) var autoSnapshots: [Snapshot] = []
 
     // 設定（會存檔）
+    /// 開啟 App 時，今天還沒記錄就自動存一個估值點
+    var autoRecord = true { didSet { persist() } }
     var hideAmounts = false { didSet { persist() } }
     /// 台灣慣例：紅漲綠跌
     var redMeansUp = true { didSet { persist() } }
@@ -44,9 +49,10 @@ final class PortfolioStore {
 
     static let shared = PortfolioStore.load()
 
-    init(accounts: [Account], snapshots: [Snapshot]) {
+    init(accounts: [Account], snapshots: [Snapshot], autoSnapshots: [Snapshot] = []) {
         self.accounts = accounts
         self.snapshots = snapshots.sorted { $0.date < $1.date }
+        self.autoSnapshots = autoSnapshots.sorted { $0.date < $1.date }
     }
 
     // MARK: 存檔
@@ -57,7 +63,9 @@ final class PortfolioStore {
         var message: String?
         do {
             if let data = try persistence.load() {
-                store = PortfolioStore(accounts: data.accounts, snapshots: data.snapshots)
+                store = PortfolioStore(accounts: data.accounts, snapshots: data.snapshots,
+                                       autoSnapshots: data.autoSnapshots ?? [])
+                store.autoRecord = data.settings.autoRecord
                 store.redMeansUp = data.settings.redMeansUp
                 store.hideAmounts = data.settings.hideAmounts
                 store.autoFetchQuotes = data.settings.autoFetchQuotes
@@ -91,14 +99,16 @@ final class PortfolioStore {
 
     private var storedData: StoredData {
         StoredData(accounts: accounts, snapshots: snapshots,
+                   autoSnapshots: autoSnapshots.isEmpty ? nil : autoSnapshots,
                    settings: .init(redMeansUp: redMeansUp, hideAmounts: hideAmounts,
-                                  autoFetchQuotes: autoFetchQuotes, appearance: appearance))
+                                  autoFetchQuotes: autoFetchQuotes, appearance: appearance,
+                                  autoRecord: autoRecord))
     }
 
-    private func persist() {
+    private func persist(backup: Bool = true) {
         guard let persistence else { return }
         do {
-            try persistence.save(storedData)
+            try persistence.save(storedData, makeBackup: backup)
         } catch {
             alertMessage = "存檔失敗：\(error.localizedDescription)"
         }
@@ -115,6 +125,8 @@ final class PortfolioStore {
         persistence = nil   // 批次修改，最後只存一次
         accounts = imported.accounts
         snapshots = imported.snapshots.sorted { $0.date < $1.date }
+        autoSnapshots = (imported.autoSnapshots ?? []).sorted { $0.date < $1.date }
+        autoRecord = imported.settings.autoRecord
         redMeansUp = imported.settings.redMeansUp
         hideAmounts = imported.settings.hideAmounts
         autoFetchQuotes = imported.settings.autoFetchQuotes
@@ -124,6 +136,37 @@ final class PortfolioStore {
     }
 
     var latest: Snapshot? { snapshots.last }
+
+    /// 畫走勢圖與日曆用：手動記錄加上自動估值點，依日期排序
+    var chartSnapshots: [Snapshot] { (snapshots + autoSnapshots).sorted { $0.date < $1.date } }
+
+    func isAuto(_ s: Snapshot) -> Bool { autoSnapshots.contains { $0.id == s.id } }
+
+    func deleteAuto(_ s: Snapshot) {
+        autoSnapshots.removeAll { $0.id == s.id }
+        persist(backup: false)
+    }
+
+    func clearAutoSnapshots() {
+        autoSnapshots = []
+        persist()
+    }
+
+    /// 今天還沒有手動記錄時，把「最新記錄的餘額 × 現在的報價」存成今天的估值點。
+    /// 一天只留一個（之後再開 App 會更新成較新的數字）。報價沒抓齊就不存，避免混入舊的報價。
+    private func recordAutoSnapshot() {
+        let cal = Calendar.current
+        guard autoRecord, let live = liveSnapshot, let latest, !cal.isDateInToday(latest.date),
+              Quote.allCases.allSatisfy({ liveQuotes[$0] != nil }),
+              heldSymbols.allSatisfy({ liveStocks[$0] != nil }) else { return }
+        let existing = autoSnapshots.first { cal.isDateInToday($0.date) }
+        let snap = Snapshot(id: existing?.id ?? UUID(), date: .now, quotes: live.quotes, amounts: live.amounts,
+                            holdings: live.holdings, stockPrices: live.stockPrices)
+        autoSnapshots.removeAll { cal.isDateInToday($0.date) }
+        autoSnapshots.append(snap)
+        autoSnapshots.sort { $0.date < $1.date }
+        persist(backup: false)
+    }
 
     func snapshot(before s: Snapshot) -> Snapshot? {
         snapshots.last { $0.date < s.date }
@@ -226,6 +269,8 @@ final class PortfolioStore {
     /// 同一天只保留一筆紀錄，再次儲存會覆蓋。
     func save(_ snapshot: Snapshot) {
         snapshots.removeAll { Calendar.current.isDate($0.date, inSameDayAs: snapshot.date) }
+        // 同一天有了手動記錄，自動估值點就不需要了
+        autoSnapshots.removeAll { Calendar.current.isDate($0.date, inSameDayAs: snapshot.date) }
         snapshots.append(snapshot)
         snapshots.sort { $0.date < $1.date }
         persist()
@@ -306,6 +351,7 @@ final class PortfolioStore {
         let gotAnything = !q.values.isEmpty || !s.quotes.isEmpty
         if gotAnything { liveUpdatedAt = .now }
         liveStatus = gotAnything ? .ready : .failed
+        if gotAnything { recordAutoSnapshot() }
     }
 
     /// 把「輸入餘額」的股票帳戶改成持股明細。過去的金額會當作帳戶現金保留，歷史不變。
