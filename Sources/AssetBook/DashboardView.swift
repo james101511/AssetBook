@@ -658,23 +658,41 @@ private struct DonutChart: View {
     var progress: CGFloat
     var lineWidth: CGFloat = 26
 
-    private var arcs: [Arc] {
+    /// 每一段的弧長（佔整圈的比例）。太小的段落放大到剛好放得下一顆圓頭，
+    /// 多出來的長度從其他段按比例扣掉，所以每一段都能維持圓角。
+    private func arcs(minSpan: CGFloat) -> [Arc] {
         let total = max(slices.reduce(0) { $0 + $1.value }, 1)
+        var spans = slices.map { CGFloat($0.value / total) }
+        let small = spans.indices.filter { spans[$0] < minSpan }
+        // 全部都很小（例如只有兩三段）時不調整，避免超過一整圈
+        if !small.isEmpty, CGFloat(small.count) * minSpan < 0.5 {
+            let big = spans.indices.filter { !small.contains($0) }
+            let bigTotal = big.reduce(0) { $0 + spans[$1] }
+            let extra = small.reduce(0) { $0 + (minSpan - spans[$1]) }
+            if bigTotal > extra {
+                let scale = (bigTotal - extra) / bigTotal
+                for i in big { spans[i] *= scale }
+                for i in small { spans[i] = minSpan }
+            }
+        }
         var cursor: CGFloat = 0
-        return slices.map { s in
-            let span = CGFloat(s.value / total)
+        return zip(slices, spans).map { s, span in
             defer { cursor += span }
             return Arc(id: s.id, color: s.color, start: cursor, end: cursor + span)
         }
     }
+
+    /// 圓頭線帽會往兩端各多畫半個線寬，段落之間的間隔要把它算進去
+    private func gap(radius: CGFloat) -> CGFloat { (lineWidth + 5) / (2 * .pi * radius) }
 
     var body: some View {
         GeometryReader { geo in
             let side = min(geo.size.width, geo.size.height)
             // 留空間給選取時變粗的線條和光暈
             let radius = (side - lineWidth - 18) / 2
-            // 圓頭線帽會往兩端各多畫半個線寬，間隔要把它算進去
-            let gap = (lineWidth + 5) / (2 * .pi * radius)
+            let gap = gap(radius: radius)
+            // 比一顆圓點還短的段落放大到剛好是一顆圓點（再多一點點，才畫得出圓頭）
+            let arcs = arcs(minSpan: gap + 0.0005)
             ZStack {
                 Circle()
                     .stroke(Color.primary.opacity(0.05), lineWidth: lineWidth)
@@ -687,12 +705,12 @@ private struct DonutChart: View {
             .contentShape(Circle())
             .onContinuousHover { phase in
                 switch phase {
-                case .active(let point): select(hit(point, in: geo.size, radius: radius))
+                case .active(let point): select(hit(point, in: geo.size, radius: radius, arcs: arcs))
                 case .ended: select(nil)
                 }
             }
             .onTapGesture { point in
-                let id = hit(point, in: geo.size, radius: radius)
+                let id = hit(point, in: geo.size, radius: radius, arcs: arcs)
                 select(selected == id ? nil : id)
             }
         }
@@ -702,19 +720,14 @@ private struct DonutChart: View {
 
     @ViewBuilder private func segment(_ arc: Arc, gap: CGFloat, radius: CGFloat) -> some View {
         let isSelected = selected == arc.id
-        let span = arc.end - arc.start
-        // 圓頭線帽本身就佔一個線寬；放得下一顆圓點就用圓頭（短的段落縮成置中的圓點），
-        // 真的太小才改用平頭細線，至少看得到
-        let cap = gap * lineWidth / (lineWidth + 5)
-        let tiny = span < cap * 1.1
         let mid = (arc.start + arc.end) / 2
-        let half = tiny ? max(span / 2 - min(span * 0.15, 0.002), 0) : max((span - gap) / 2, 0.0005)
+        let half = max((arc.end - arc.start - gap) / 2, 0.00025)
         let from = (mid - half) * progress
         let to = max((mid + half) * progress, from)
         Circle()
             .trim(from: from, to: to)
             .stroke(arc.color,
-                    style: StrokeStyle(lineWidth: isSelected ? lineWidth + 7 : lineWidth, lineCap: tiny ? .butt : .round))
+                    style: StrokeStyle(lineWidth: isSelected ? lineWidth + 7 : lineWidth, lineCap: .round))
             .frame(width: radius * 2, height: radius * 2)
             .rotationEffect(.degrees(-90))
             .opacity(selected == nil || isSelected ? 1 : 0.28)
@@ -726,7 +739,7 @@ private struct DonutChart: View {
     }
 
     /// 滑鼠或手指的位置落在哪一段（不在圓環上就回傳 nil）
-    private func hit(_ point: CGPoint, in size: CGSize, radius: CGFloat) -> String? {
+    private func hit(_ point: CGPoint, in size: CGSize, radius: CGFloat, arcs: [Arc]) -> String? {
         let dx = point.x - size.width / 2, dy = point.y - size.height / 2
         let distance = sqrt(dx * dx + dy * dy)
         guard abs(distance - radius) <= lineWidth / 2 + 10 else { return nil }
